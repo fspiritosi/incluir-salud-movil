@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, ScrollView, StyleSheet, Platform } from 'react-native';
+import { View, ScrollView, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { supabase } from '../../lib/supabase';
@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '../../components/ui/avatar';
-import { Badge } from '../../components/ui/badge';
+
 import { 
   AlertDialog,
   AlertDialogAction,
@@ -20,8 +20,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '../../components/ui/alert-dialog';
-import { User, Mail, Lock, LogOut } from 'lucide-react-native';
-import { useDevMode } from '../../contexts/DevModeContext';
+import { User, Mail, Lock, LogOut, RefreshCw } from 'lucide-react-native';
+import * as Updates from 'expo-updates';
 
 export default function PerfilPage() {
     const insets = useSafeAreaInsets();
@@ -41,7 +41,7 @@ export default function PerfilPage() {
     const [documentNumber, setDocumentNumber] = useState('');
     const [phone, setPhone] = useState('');
     const [avatarUrl, setAvatarUrl] = useState('');
-    const { isDevMode } = useDevMode();
+    const [updateStatus, setUpdateStatus] = useState('');
 
     useEffect(() => {
         supabase.auth.getSession().then(({ data: { session } }) => {
@@ -118,6 +118,31 @@ export default function PerfilPage() {
         setSignOutModalOpen(false);
     };
 
+    const checkForUpdates = async () => {
+        setUpdateStatus('Buscando actualizaciones...');
+        try {
+            const update = await Updates.checkForUpdateAsync();
+
+            if (update.isAvailable) {
+                setUpdateStatus('¡Actualización encontrada! Descargando...');
+                await Updates.fetchUpdateAsync();
+                setUpdateStatus('Actualización descargada. Reiniciando app...');
+                setTimeout(async () => {
+                    await Updates.reloadAsync();
+                }, 1000);
+            } else {
+                setUpdateStatus('Ya estás en la última versión.');
+                setSuccessMessage('Tu aplicación ya está actualizada.');
+                setSuccessModalOpen(true);
+            }
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            setUpdateStatus(`Error: ${errorMessage}`);
+            setErrorMessage(`Error al buscar actualizaciones: ${errorMessage}`);
+            setErrorModalOpen(true);
+        }
+    };
+
     if (!session) {
         return null;
     }
@@ -125,13 +150,13 @@ export default function PerfilPage() {
     return (
         <>
         <ScrollView 
-            style={styles.container}
+            className="flex-1 bg-background"
             contentContainerStyle={{
                 paddingBottom: Platform.OS === 'android' ? 70 + Math.max(insets.bottom, 0) + 20 : 90
             }}
         >
             {/* Header */}
-            <View style={styles.header}>
+            <View className="p-6 pt-16 bg-card">
                 <Text variant="h2">Mi Perfil</Text>
                 <Text variant="muted">
                     Gestiona tu información personal
@@ -139,8 +164,8 @@ export default function PerfilPage() {
             </View>
 
             {/* Avatar Section */}
-            <Card style={styles.avatarCard}>
-                <CardContent style={styles.avatarContent}>
+            <Card className="m-6 mb-4">
+                <CardContent className="py-8 px-6">
                     <View className="items-center gap-4">
                         <Avatar 
                             alt={`${firstName} ${lastName}` || 'Usuario'}
@@ -150,7 +175,7 @@ export default function PerfilPage() {
                                 source={{ uri: avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(firstName + ' ' + lastName)}&background=3b82f6&color=fff&size=128` }} 
                             />
                             <AvatarFallback>
-                                <Text className="text-2xl font-bold text-white">
+                                <Text className="text-2xl font-bold text-primary-foreground">
                                     {firstName && lastName 
                                         ? `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase()
                                         : 'U'
@@ -164,11 +189,6 @@ export default function PerfilPage() {
                                 {firstName && lastName ? `${firstName} ${lastName}` : 'Usuario'}
                             </Text>
                             <Text variant="muted" className="text-center">{session.user.email}</Text>
-                            {isDevMode && (
-                                <Badge variant="destructive" className="mt-2">
-                                    <Text className="text-xs font-bold">DEV MODE</Text>
-                                </Badge>
-                            )}
                         </View>
 
                         <Button 
@@ -181,7 +201,7 @@ export default function PerfilPage() {
                             className="mt-2"
                         >
                             <View className="flex-row items-center gap-2">
-                                <User size={16} color="#6b7280" />
+                                <User size={16} className="text-muted-foreground" />
                                 <Text className="text-sm">Cambiar Foto</Text>
                             </View>
                         </Button>
@@ -190,13 +210,13 @@ export default function PerfilPage() {
             </Card>
 
             {/* Personal Information */}
-            <Card style={styles.formCard}>
+            <Card className="mx-6 mb-4">
                 <CardHeader>
                     <Text variant="h3">Información Personal</Text>
                 </CardHeader>
-                <CardContent style={styles.formContent}>
-                    <View style={styles.inputGroup}>
-                        <Text variant="small" style={styles.label}>Nombre</Text>
+                <CardContent className="pt-0">
+                    <View className="mb-4">
+                        <Text variant="small" className="mb-2 font-medium">Nombre</Text>
                         <Input
                             value={firstName}
                             onChangeText={setFirstName}
@@ -204,8 +224,8 @@ export default function PerfilPage() {
                         />
                     </View>
 
-                    <View style={styles.inputGroup}>
-                        <Text variant="small" style={styles.label}>Apellido</Text>
+                    <View className="mb-4">
+                        <Text variant="small" className="mb-2 font-medium">Apellido</Text>
                         <Input
                             value={lastName}
                             onChangeText={setLastName}
@@ -213,10 +233,8 @@ export default function PerfilPage() {
                         />
                     </View>
 
-
-
-                    <View style={styles.inputGroup}>
-                        <Text variant="small" style={styles.label}>Teléfono</Text>
+                    <View className="mb-4">
+                        <Text variant="small" className="mb-2 font-medium">Teléfono</Text>
                         <Input
                             value={phone}
                             onChangeText={setPhone}
@@ -228,38 +246,40 @@ export default function PerfilPage() {
                     <Button
                         onPress={updateProfile}
                         disabled={loading}
-                        style={styles.updateButton}
+                        className="mt-2"
                     >
-                        <Text>{loading ? 'Actualizando...' : 'Actualizar Perfil'}</Text>
+                        <Text className="text-primary-foreground font-medium">
+                            {loading ? 'Actualizando...' : 'Actualizar Perfil'}
+                        </Text>
                     </Button>
                 </CardContent>
             </Card>
 
             {/* Account Information */}
-            <Card style={styles.accountCard}>
+            <Card className="mx-6 mb-4">
                 <CardHeader>
                     <Text variant="h3">Información de Cuenta</Text>
                 </CardHeader>
-                <CardContent style={styles.accountContent}>
-                    <View style={styles.accountRow}>
-                        <Text variant="small" style={styles.accountLabel}>Email:</Text>
+                <CardContent className="pt-0">
+                    <View className="flex-row justify-between items-center py-2 border-b border-border">
+                        <Text variant="small" className="font-medium">Email:</Text>
                         <Text variant="muted">{session.user.email}</Text>
                     </View>
 
-                    <View style={styles.accountRow}>
-                        <Text variant="small" style={styles.accountLabel}>Documento:</Text>
+                    <View className="flex-row justify-between items-center py-2 border-b border-border">
+                        <Text variant="small" className="font-medium">Documento:</Text>
                         <Text variant="muted">{documentNumber || 'No especificado'}</Text>
                     </View>
 
-                    <View style={styles.accountRow}>
-                        <Text variant="small" style={styles.accountLabel}>Cuenta creada:</Text>
+                    <View className="flex-row justify-between items-center py-2 border-b border-border">
+                        <Text variant="small" className="font-medium">Cuenta creada:</Text>
                         <Text variant="muted">
                             {new Date(session.user.created_at).toLocaleDateString('es-AR')}
                         </Text>
                     </View>
 
-                    <View style={styles.accountRow}>
-                        <Text variant="small" style={styles.accountLabel}>Último acceso:</Text>
+                    <View className="flex-row justify-between items-center py-2">
+                        <Text variant="small" className="font-medium">Último acceso:</Text>
                         <Text variant="muted">
                             {session.user.last_sign_in_at
                                 ? new Date(session.user.last_sign_in_at).toLocaleDateString('es-AR')
@@ -271,18 +291,18 @@ export default function PerfilPage() {
             </Card>
 
             {/* Actions */}
-            <View style={styles.actionsContainer}>
+            <View className="px-6 gap-3">
                 <Button
                     variant="outline"
                     onPress={() => {
                         setInfoMessage('Esta función estará disponible pronto');
                         setInfoModalOpen(true);
                     }}
-                    style={styles.actionButton}
+                    className="w-full"
                 >
-                    <View style={styles.buttonContent}>
-                        <Lock size={20} color="#000000" />
-                        <Text style={styles.buttonTextOutline}>Cambiar Contraseña</Text>
+                    <View className="flex-row items-center gap-2">
+                        <Lock size={20} className="text-foreground" />
+                        <Text className="text-foreground font-medium">Cambiar Contraseña</Text>
                     </View>
                 </Button>
 
@@ -292,27 +312,47 @@ export default function PerfilPage() {
                         setInfoMessage('Esta función estará disponible pronto');
                         setInfoModalOpen(true);
                     }}
-                    style={styles.actionButton}
+                    className="w-full"
                 >
-                    <View style={styles.buttonContent}>
-                        <Mail size={20} color="#000000" />
-                        <Text style={styles.buttonTextOutline}>Cambiar Email</Text>
+                    <View className="flex-row items-center gap-2">
+                        <Mail size={20} className="text-foreground" />
+                        <Text className="text-foreground font-medium">Cambiar Email</Text>
                     </View>
                 </Button>
+
+                <Button
+                    variant="outline"
+                    onPress={checkForUpdates}
+                    disabled={!!updateStatus && updateStatus.includes('...')}
+                    className="w-full"
+                >
+                    <View className="flex-row items-center gap-2">
+                        <RefreshCw size={20} className="text-foreground" />
+                        <Text className="text-foreground font-medium">
+                            {updateStatus && updateStatus.includes('...') ? 'Actualizando...' : 'Buscar Actualizaciones'}
+                        </Text>
+                    </View>
+                </Button>
+
+                {updateStatus && !updateStatus.includes('...') && (
+                    <Text className="text-center text-xs text-muted-foreground mt-2 px-4">
+                        {updateStatus}
+                    </Text>
+                )}
 
                 <Button
                     variant="destructive"
                     onPress={signOut}
-                    style={styles.actionButton}
+                    className="w-full"
                 >
-                    <View style={styles.buttonContent}>
-                        <LogOut size={20} color="#ffffff" />
-                        <Text style={styles.buttonTextDestructive}>Cerrar Sesión</Text>
+                    <View className="flex-row items-center gap-2">
+                        <LogOut size={20} className="text-destructive-foreground" />
+                        <Text className="text-destructive-foreground font-medium">Cerrar Sesión</Text>
                     </View>
                 </Button>
             </View>
 
-            <View style={styles.bottomSpacer} />
+            <View className="h-10" />
         </ScrollView>
 
         {/* Modal de Confirmación para Cerrar Sesión */}
@@ -389,80 +429,3 @@ export default function PerfilPage() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#f8f9fa',
-    },
-    header: {
-        padding: 24,
-        paddingTop: 64,
-        backgroundColor: '#ffffff',
-    },
-    avatarCard: {
-        margin: 24,
-        marginBottom: 16,
-    },
-    avatarContent: {
-        paddingVertical: 32,
-        paddingHorizontal: 24,
-    },
-    formCard: {
-        marginHorizontal: 24,
-        marginBottom: 16,
-    },
-    formContent: {
-        paddingTop: 0,
-    },
-    inputGroup: {
-        marginBottom: 16,
-    },
-    label: {
-        marginBottom: 8,
-        fontWeight: '500',
-    },
-    updateButton: {
-        marginTop: 8,
-    },
-    accountCard: {
-        marginHorizontal: 24,
-        marginBottom: 16,
-    },
-    accountContent: {
-        paddingTop: 0,
-    },
-    accountRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        paddingVertical: 8,
-        borderBottomWidth: 1,
-        borderBottomColor: '#f3f4f6',
-    },
-    accountLabel: {
-        fontWeight: '500',
-    },
-    actionsContainer: {
-        paddingHorizontal: 24,
-        gap: 12,
-    },
-    actionButton: {
-        width: '100%',
-    },
-    buttonContent: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    buttonTextOutline: {
-        color: '#000000',
-        fontWeight: '500',
-    },
-    buttonTextDestructive: {
-        color: '#ffffff',
-        fontWeight: '500',
-    },
-    bottomSpacer: {
-        height: 40,
-    },
-});

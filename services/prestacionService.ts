@@ -165,6 +165,8 @@ class PrestacionService {
     }
   }
 
+
+
   // Obtener prestaciones del día actual con sistema de cache inteligente
   async obtenerPrestacionesDelDia(userId?: string, forceRefresh: boolean = false): Promise<{
     pendientes: PrestacionCompleta[];
@@ -323,8 +325,7 @@ const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_c
     prestacionId: string,
     ubicacionLat: number,
     ubicacionLng: number,
-    notas?: string,
-    devModeSettings?: { skipLocationValidation?: boolean }
+    notas?: string
   ): Promise<ValidacionUbicacion> {
     try {
       const isOnline = await connectivityService.isOnline();
@@ -332,29 +333,6 @@ const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_c
       // Si no hay conexión, validar offline
       if (!isOnline) {
         console.log('📱 Sin conexión - validando ubicación offline');
-        
-        // Si dev mode tiene skip location validation, aprobar automáticamente
-        if (devModeSettings?.skipLocationValidation) {
-          await this.guardarPrestacionOffline({
-            prestacion_id: prestacionId,
-            ubicacion_lat: ubicacionLat,
-            ubicacion_lng: ubicacionLng,
-            notas: notas || '',
-            timestamp: new Date().toISOString(),
-            distancia_metros: 0
-          });
-
-          return {
-            exito: true,
-            mensaje: 'Prestación completada offline (modo desarrollo) - se sincronizará automáticamente',
-            distancia_metros: 0,
-            prestacion_actualizada: {
-              id: prestacionId,
-              estado: 'completada',
-              fecha_cierre: new Date().toISOString()
-            }
-          };
-        }
 
         // Validar ubicación usando datos en cache
         const validacionOffline = await this.validarUbicacionOffline(prestacionId, ubicacionLat, ubicacionLng);
@@ -375,31 +353,6 @@ const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_c
       }
 
       // Si hay conexión, usar validación online normal
-      // Si dev mode tiene skip location validation, actualizar directamente
-      if (devModeSettings?.skipLocationValidation) {
-        const { error } = await supabase
-          .from('prestaciones')
-          .update({
-            estado: 'completada',
-            notas: notas || null,
-            ubicacion_cierre: `POINT(${ubicacionLng} ${ubicacionLat})`,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', prestacionId);
-
-        if (error) throw error;
-
-        return {
-          exito: true,
-          mensaje: 'Prestación completada exitosamente (modo desarrollo)',
-          distancia_metros: 0,
-          prestacion_actualizada: {
-            id: prestacionId,
-            estado: 'completada',
-            fecha_cierre: new Date().toISOString()
-          }
-        };
-      }
 
       // Llamar a la función de Supabase para validar y cerrar
       const { data, error } = await supabase.rpc('cerrar_prestacion_con_validacion', {
@@ -703,12 +656,130 @@ const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_c
 
     return R * c; // Distancia en metros
   }
+  // Obtener prestaciones por rango de fechas personalizado
+  async obtenerPrestacionesPorRango(
+    fechaInicio: Date, 
+    fechaFin: Date, 
+    userId?: string
+  ): Promise<{
+    pendientes: PrestacionCompleta[];
+    completadas: PrestacionCompleta[];
+    isFromCache: boolean;
+    isOffline: boolean;
+  }> {
+    try {
+      const isOnline = await connectivityService.isOnline();
+
+      // Si no hay internet, intentar usar cache solo si el rango incluye el día actual
+      if (!isOnline) {
+        const hoy = moment.tz(this.TIMEZONE).startOf('day');
+        const inicioRango = moment(fechaInicio).startOf('day');
+        const finRango = moment(fechaFin).endOf('day');
+        
+        // Si el rango incluye hoy, devolver cache del día actual
+        if (hoy.isBetween(inicioRango, finRango, null, '[]')) {
+          console.log('📡 Sin conexión - usando cache del día actual para rango que incluye hoy');
+          const cachedData = await this.obtenerDeCache();
+          if (cachedData) {
+            return { ...cachedData, isFromCache: true, isOffline: true };
+          }
+        }
+        
+        throw new Error('Sin conexión y el rango solicitado no está disponible offline');
+      }
+
+      // Si hay internet, obtener datos del servidor
+      const { data: { user } } = await supabase.auth.getUser();
+      const currentUserId = userId || user?.id;
+
+      if (!currentUserId) {
+        throw new Error('Usuario no autenticado');
+      }
+
+      // Convertir fechas a formato ISO con timezone
+      const inicioISO = moment(fechaInicio).tz(this.TIMEZONE).startOf('day').toISOString();
+      const finISO = moment(fechaFin).tz(this.TIMEZONE).endOf('day').toISOString();
+
+      // Query usando RPC para obtener coordenadas extraídas
+      const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_con_coordenadas', {
+        p_user_id: currentUserId,
+        p_fecha_inicio: inicioISO,
+        p_fecha_fin: finISO
+      });
+
+      if (error) {
+        console.log(error);
+        throw error;
+      }
+
+      // Transformar datos a formato esperado por la aplicación
+      const prestacionesCompletas: PrestacionCompleta[] = (prestaciones || []).map((p: any) => {
+        return {
+          prestacion_id: p.id,
+          descripcion: p.descripcion || `${p.tipo_prestacion} - ${p.paciente_nombre} ${p.paciente_apellido}`,
+          fecha: p.fecha,
+          monto: p.monto,
+          paciente_nombre: `${p.paciente_nombre} ${p.paciente_apellido}`,
+          paciente_direccion: p.paciente_direccion_completa,
+          paciente_telefono: p.paciente_telefono,
+          ubicacion_paciente_lat: p.paciente_lat || 0,
+          ubicacion_paciente_lng: p.paciente_lng || 0,
+          obra_social: p.obra_social_nombre || 'Sin obra social',
+          estado: p.estado,
+          tipo_prestacion: p.tipo_prestacion,
+          notas: p.notas || undefined
+        };
+      });
+
+      const pendientes = prestacionesCompletas.filter(p => p.estado === 'pendiente');
+      const completadas = prestacionesCompletas.filter(p => p.estado === 'completada');
+
+      // Si el rango incluye el día actual, actualizar cache
+      const hoy = moment.tz(this.TIMEZONE).startOf('day');
+      const inicioRango = moment(fechaInicio).startOf('day');
+      const finRango = moment(fechaFin).endOf('day');
+      
+      if (hoy.isBetween(inicioRango, finRango, null, '[]')) {
+        // Filtrar solo las prestaciones del día actual para el cache
+        const prestacionesHoy = prestacionesCompletas.filter(p => {
+          const fechaPrestacion = moment(p.fecha).tz(this.TIMEZONE).startOf('day');
+          return fechaPrestacion.isSame(hoy, 'day');
+        });
+        
+        const pendientesHoy = prestacionesHoy.filter(p => p.estado === 'pendiente');
+        const completadasHoy = prestacionesHoy.filter(p => p.estado === 'completada');
+        
+        await this.guardarEnCache({ pendientes: pendientesHoy, completadas: completadasHoy });
+        console.log('💾 Cache del día actual actualizado durante consulta de rango');
+      }
+
+      return { pendientes, completadas, isFromCache: false, isOffline: false };
+    } catch (error) {
+      console.error('Error obteniendo prestaciones por rango:', error);
+      throw error;
+    }
+  }
+
+  // Obtener prestaciones del mes actual
+  async obtenerPrestacionesDelMes(userId?: string): Promise<{
+    pendientes: PrestacionCompleta[];
+    completadas: PrestacionCompleta[];
+    isFromCache: boolean;
+    isOffline: boolean;
+  }> {
+    const inicioMes = moment.tz(this.TIMEZONE).startOf('month').toDate();
+    const finMes = moment.tz(this.TIMEZONE).endOf('month').toDate();
+    
+    return this.obtenerPrestacionesPorRango(inicioMes, finMes, userId);
+  }
 }
 
 export const prestacionService = new PrestacionService();
 
 // Tipos derivados usando Awaited<ReturnType<>>
 export type ObtenerPrestacionesResult = Awaited<ReturnType<typeof prestacionService.obtenerPrestacionesDelDia>>;
+export type ObtenerPrestacionesRangoResult = Awaited<ReturnType<typeof prestacionService.obtenerPrestacionesPorRango>>;
+export type ObtenerPrestacionesMesResult = Awaited<ReturnType<typeof prestacionService.obtenerPrestacionesDelMes>>;
 export type ValidacionUbicacionResult = Awaited<ReturnType<typeof prestacionService.cerrarPrestacionConValidacion>>;
 export type PrestacionesOfflineResult = Awaited<ReturnType<typeof prestacionService.obtenerPrestacionesOffline>>;
 export type SincronizacionResult = Awaited<ReturnType<typeof prestacionService.sincronizarPrestacionesOffline>>;

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, ScrollView, StyleSheet, RefreshControl, Linking, Platform } from 'react-native';
+import { View, ScrollView, RefreshControl, Linking, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useConnectivity } from '../../services/connectivityService';
 import { router } from 'expo-router';
@@ -18,35 +18,31 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from '../../components/ui/alert-dialog';
 import {
-  Calendar,
-  DollarSign,
   Clock,
   CheckCircle,
   MapPin,
   Phone,
-  RotateCcw,
-  AlertTriangle,
-  Wifi,
   WifiOff,
-  Loader2,
-  RefreshCw
+  Wifi
 } from 'lucide-react-native';
 import {
   PrestacionCompleta,
   prestacionService,
   ObtenerPrestacionesResult,
+  ObtenerPrestacionesRangoResult,
+  ObtenerPrestacionesMesResult,
   SincronizacionCompletaResult,
   SincronizacionResult
 } from '../../services/prestacionService';
+import { DateFilter, DateFilterType, DateRange } from '../../components/ui/date-filter';
 import CompletarPrestacionModal from '../../components/CompletarPrestacionModal';
+
+
+
 import { Badge } from '../../components/ui/badge';
-import { Separator } from '../../components/ui/separator';
-import { Alert, AlertDescription, AlertTitle } from '../../components/ui/alert';
-import { useDevMode } from '../../contexts/DevModeContext';
-import DevModeDebug from '../../components/DevModeDebug';
+
 
 export default function PrestacionesPage() {
   const insets = useSafeAreaInsets();
@@ -59,13 +55,15 @@ export default function PrestacionesPage() {
   const [modalVisible, setModalVisible] = useState(false);
   const [prestacionSeleccionada, setPrestacionSeleccionada] = useState<PrestacionCompleta | null>(null);
   const [prestacionesOffline, setPrestacionesOffline] = useState(0);
-  const [isFromCache, setIsFromCache] = useState(false);
+
   const [isOffline, setIsOffline] = useState(false);
-  const { settings, isDevMode } = useDevMode();
+
+  // Estados para filtros de fecha
+  const [dateFilter, setDateFilter] = useState<DateFilterType>('today');
+  const [customDateRange, setCustomDateRange] = useState<DateRange | undefined>();
+
 
   // Estados para modales
-  const [resetModalOpen, setResetModalOpen] = useState(false);
-  const [resetPrestacionId, setResetPrestacionId] = useState<string | null>(null);
   const [successModalOpen, setSuccessModalOpen] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const [errorModalOpen, setErrorModalOpen] = useState(false);
@@ -96,15 +94,45 @@ export default function PrestacionesPage() {
     }
   }, [session]);
 
+  // Recargar cuando cambie el filtro de fecha
+  useEffect(() => {
+    if (session) {
+      loadPrestaciones();
+    }
+  }, [dateFilter, customDateRange]);
+
   const loadPrestaciones = async (forceRefresh: boolean = false) => {
     try {
       setLoading(true);
 
-      const resultado: ObtenerPrestacionesResult = await prestacionService.obtenerPrestacionesDelDia(undefined, forceRefresh);
+      let resultado: ObtenerPrestacionesResult | ObtenerPrestacionesRangoResult | ObtenerPrestacionesMesResult;
+
+      // Cargar según el filtro seleccionado
+      switch (dateFilter) {
+        case 'today':
+          resultado = await prestacionService.obtenerPrestacionesDelDia(undefined, forceRefresh);
+          break;
+        case 'month':
+          resultado = await prestacionService.obtenerPrestacionesDelMes();
+          break;
+        case 'custom':
+          if (customDateRange) {
+            resultado = await prestacionService.obtenerPrestacionesPorRango(
+              customDateRange.start,
+              customDateRange.end
+            );
+          } else {
+            // Fallback a día actual si no hay rango personalizado
+            resultado = await prestacionService.obtenerPrestacionesDelDia(undefined, forceRefresh);
+          }
+          break;
+        default:
+          resultado = await prestacionService.obtenerPrestacionesDelDia(undefined, forceRefresh);
+      }
 
       setPrestacionesPendientes(resultado.pendientes);
       setPrestacionesCompletadas(resultado.completadas);
-      setIsFromCache(resultado.isFromCache);
+
       setIsOffline(resultado.isOffline);
 
       // Si es offline y hay datos, mostrar mensaje informativo
@@ -133,6 +161,11 @@ export default function PrestacionesPage() {
     } catch (error) {
       console.error('Error checking offline prestaciones:', error);
     }
+  };
+
+  const handleDateFilterChange = (filter: DateFilterType, range?: DateRange) => {
+    setDateFilter(filter);
+    setCustomDateRange(range);
   };
 
   const onRefresh = async () => {
@@ -174,27 +207,7 @@ export default function PrestacionesPage() {
     checkPrestacionesOffline();
   };
 
-  const handleResetPrestacion = (prestacionId: string) => {
-    setResetPrestacionId(prestacionId);
-    setResetModalOpen(true);
-  };
 
-  const confirmResetPrestacion = async () => {
-    if (!resetPrestacionId) return;
-
-    try {
-      await prestacionService.resetearEstadoPrestacion(resetPrestacionId);
-      setSuccessMessage('Prestación reseteada correctamente');
-      setSuccessModalOpen(true);
-      loadPrestaciones();
-    } catch (error) {
-      setErrorMessage('No se pudo resetear la prestación');
-      setErrorModalOpen(true);
-    } finally {
-      setResetModalOpen(false);
-      setResetPrestacionId(null);
-    }
-  };
 
   const sincronizarOffline = async () => {
     try {
@@ -214,14 +227,7 @@ export default function PrestacionesPage() {
     }
   };
 
-  const getEstadoColor = (estado: string) => {
-    switch (estado) {
-      case 'completada': return '#10b981';
-      case 'pendiente': return '#f59e0b';
-      case 'cancelada': return '#ef4444';
-      default: return '#6b7280';
-    }
-  };
+
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('es-AR', {
@@ -239,9 +245,18 @@ export default function PrestacionesPage() {
   };
 
   const abrirMapa = (direccion: string, lat?: number, lng?: number) => {
-    // Priorizar la dirección para mejor precisión en Argentina
-    const direccionEncoded = encodeURIComponent(direccion);
-    const url = `https://maps.google.com/?q=${direccionEncoded}`;
+    let url: string;
+    
+    if (lat && lng) {
+      // Si tenemos coordenadas, usarlas con la dirección como etiqueta
+      const direccionEncoded = encodeURIComponent(direccion);
+      url = `https://maps.google.com/?q=${lat},${lng}+(${direccionEncoded})`;
+    } else {
+      // Fallback a búsqueda por dirección
+      const direccionEncoded = encodeURIComponent(direccion);
+      url = `https://maps.google.com/?q=${direccionEncoded}`;
+    }
+    
     Linking.openURL(url);
   };
 
@@ -249,11 +264,7 @@ export default function PrestacionesPage() {
     return prestacionService.esFechaVencida(fecha);
   };
 
-  // VALIDACIÓN DE TIEMPO COMENTADA - Ahora se puede completar en cualquier momento
-  const puedeCompletarPrestacion = (fecha: string) => {
-    // return isPrestacionVencida(fecha) || settings.skipTimeValidation;
-    return true; // Siempre permitir completar prestaciones
-  };
+
 
   if (!session) {
     return null;
@@ -262,7 +273,7 @@ export default function PrestacionesPage() {
   return (
     <>
       <ScrollView
-        style={styles.container}
+        className="flex-1 bg-background"
         contentContainerStyle={{
           paddingBottom: Platform.OS === 'android' ? 70 + Math.max(insets.bottom, 0) + 20 : 90
         }}
@@ -271,103 +282,118 @@ export default function PrestacionesPage() {
         }
       >
         {/* Header */}
-        <View style={styles.header}>
-          <View className="flex-row justify-between items-center">
-            <View>
-              <Text variant="h2">Prestaciones de Hoy</Text>
+        <View className="p-6 pt-16 bg-card">
+          <View className="flex-row justify-between items-center mb-4">
+            <View className="flex-1">
+              <Text variant="h2">
+                {dateFilter === 'today' ? 'Prestaciones de Hoy' : 
+                 dateFilter === 'month' ? 'Prestaciones del Mes' : 
+                 'Prestaciones Personalizadas'}
+              </Text>
               <Text variant="muted">
-                {prestacionService.obtenerFechaActualArgentina().format('dddd, D [de] MMMM [de] YYYY')}
+                {dateFilter === 'today' 
+                  ? prestacionService.obtenerFechaActualArgentina().format('dddd, D [de] MMMM [de] YYYY')
+                  : dateFilter === 'month'
+                  ? prestacionService.obtenerFechaActualArgentina().format('MMMM [de] YYYY')
+                  : customDateRange 
+                  ? `${prestacionService.obtenerFechaActualArgentina().set({
+                      year: customDateRange.start.getFullYear(),
+                      month: customDateRange.start.getMonth(),
+                      date: customDateRange.start.getDate()
+                    }).format('DD/MM/YYYY')} - ${prestacionService.obtenerFechaActualArgentina().set({
+                      year: customDateRange.end.getFullYear(),
+                      month: customDateRange.end.getMonth(),
+                      date: customDateRange.end.getDate()
+                    }).format('DD/MM/YYYY')}`
+                  : 'Selecciona un rango de fechas'
+                }
               </Text>
               {/* Indicador de estado */}
               {isOffline && (
-                <Text variant="small" style={styles.offlineIndicator}>
+                <Text variant="small" className="text-amber-600 font-medium mt-0.5">
                   📱 Modo offline - Datos guardados
                 </Text>
               )}
             </View>
-
-            <View style={styles.headerBadges}>
-              {/* Connectivity Indicator */}
-              <Badge variant={connectivity.isConnected ? "default" : "destructive"}>
-                <View style={styles.connectivityBadge}>
-                  {connectivity.isConnected ? <Wifi size={12} color="#ffffff" /> : <WifiOff size={12} color="#ffffff" />}
-                  <Text className="text-xs font-bold ml-1">
-                    {connectivity.isConnected ? 'Online' : 'Offline'}
-                  </Text>
-                </View>
-              </Badge>
-
-              {/* Dev Mode Indicator */}
-              {isDevMode && (
-                <Badge variant="destructive">
-                  <Text className="text-xs font-bold">DEV MODE</Text>
-                </Badge>
-              )}
-            </View>
           </View>
+          
+          {/* Filtro de fechas */}
+          <DateFilter
+            selectedFilter={dateFilter}
+            customRange={customDateRange}
+            onFilterChange={handleDateFilterChange}
+            className="mb-2"
+          />
         </View>
 
-        {/* Debug Component */}
-        <DevModeDebug />
+
 
         {/* Prestaciones Offline */}
         {prestacionesOffline > 0 && (
-          <Card style={[styles.card, styles.offlineCard]}>
-            <CardContent style={styles.offlineContent}>
-              <WifiOff size={20} color="#f59e0b" />
-              <View style={styles.offlineText}>
-                <Text variant="small" style={styles.offlineTitle}>
+          <Card className="mx-6 mb-3 mt-4 border-amber-500 bg-amber-50">
+            <CardContent className="flex-row items-center gap-3 p-4">
+              <WifiOff size={20} className="text-amber-600" />
+              <View className="flex-1">
+                <Text variant="small" className="text-amber-800 font-medium">
                   {prestacionesOffline} prestación(es) offline
                 </Text>
-                <Text variant="small" style={styles.offlineSubtitle}>
+                <Text variant="small" className="text-amber-800">
                   Toca para sincronizar cuando tengas conexión
                 </Text>
               </View>
               <Button variant="outline" size="sm" onPress={sincronizarOffline}>
-                <Wifi size={16} color="#f59e0b" />
+                <Wifi size={16} className="text-amber-600" />
               </Button>
             </CardContent>
           </Card>
         )}
 
         {/* Prestaciones Pendientes */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text variant="h3">Pendientes ({prestacionesPendientes.length})</Text>
+        <View className="p-6 pt-4">
+          <View className="mb-4">
+            <View className="flex-row items-center">
+              <Text variant="h3">Pendientes (</Text>
+              {loading ? (
+                <Skeleton className="w-5 h-4" />
+              ) : (
+                <Text variant="h3">{prestacionesPendientes.length}</Text>
+              )}
+              <Text variant="h3">)</Text>
+            </View>
           </View>
 
           {loading ? (
             // Skeleton mientras carga
             Array.from({ length: 3 }).map((_, index) => (
-              <Card key={`skeleton-pendiente-${index}`} style={styles.card}>
-                <CardHeader style={styles.cardHeader}>
-                  <View style={styles.skeletonHeader}>
-                    <View style={styles.skeletonLeft}>
-                      <Skeleton style={styles.skeletonTitle} />
-                      <Skeleton style={styles.skeletonSubtitle} />
+              <Card key={`skeleton-pendiente-${index}`} className="mb-3">
+                <CardHeader className="px-5 pt-5 pb-3">
+                  <View className="flex-row justify-between items-start">
+                    <View className="flex-1 gap-2">
+                      <Skeleton className="w-30 h-4" />
+                      <Skeleton className="w-25 h-3" />
                     </View>
-                    <View style={styles.skeletonRight}>
-                      <Skeleton style={styles.skeletonTime} />
-                      <Skeleton style={styles.skeletonPrice} />
+                    <View className="items-end gap-1">
+                      <Skeleton className="w-15 h-3" />
+                      <Skeleton className="w-20 h-4" />
                     </View>
                   </View>
                 </CardHeader>
-                <CardContent style={styles.cardContent}>
-                  <View style={styles.skeletonContent}>
-                    <Skeleton style={styles.skeletonAddress} />
-                    <View style={styles.skeletonButtons}>
-                      <Skeleton style={styles.skeletonButton} />
-                      <Skeleton style={styles.skeletonButton} />
+                <CardContent className="px-5 pb-5">
+                  <View className="gap-3">
+                    <Skeleton className="w-4/5 h-3" />
+                    <View className="flex-row gap-2">
+                      <Skeleton className="w-15 h-8 rounded" />
+                      <Skeleton className="w-15 h-8 rounded" />
                     </View>
                   </View>
                 </CardContent>
               </Card>
             ))
           ) : prestacionesPendientes.length === 0 ? (
-            <Card style={styles.emptyCard}>
-              <CardContent style={styles.emptyContent}>
-                <CheckCircle size={48} color="#10b981" />
-                <Text variant="large" style={styles.emptyTitle}>
+            <Card className="mt-5">
+              <CardContent className="items-center py-10">
+                <CheckCircle size={48} className="text-green-500" />
+                <Text variant="large" className="mt-4 mb-2 text-green-500">
                   ¡Todo completado!
                 </Text>
                 <Text variant="muted">
@@ -394,7 +420,7 @@ export default function PrestacionesPage() {
 
                     <View className="items-end gap-1">
                       <View className="flex-row items-center gap-1">
-                        <Clock size={14} color="#6b7280" />
+                        <Clock size={14} className="text-muted-foreground" />
                         <Text variant="small" className="text-muted-foreground">
                           {formatTime(prestacion.fecha)}
                         </Text>
@@ -412,34 +438,11 @@ export default function PrestacionesPage() {
                   </Text>
 
                   <View className="flex-row items-center gap-2 mb-3">
-                    <MapPin size={14} color="#6b7280" />
+                    <MapPin size={14} className="text-muted-foreground" />
                     <Text variant="small" className="text-muted-foreground flex-1">
                       {prestacion.paciente_direccion}
                     </Text>
                   </View>
-
-                  {/* Dev Mode Badges */}
-                  {isDevMode && (settings.skipLocationValidation) && (
-                    <>
-                      <Separator className="mb-3" />
-                      <View className="flex-row gap-2 mb-3 flex-wrap">
-                        <Badge variant="destructive">
-                          <Text className="text-xs font-medium">DEV</Text>
-                        </Badge>
-                        {/* Badge de tiempo comentado - validación deshabilitada permanentemente */}
-                        {/* {settings.skipTimeValidation && (
-                          <Badge variant="secondary">
-                            <Text className="text-xs">Tiempo OFF</Text>
-                          </Badge>
-                        )} */}
-                        {settings.skipLocationValidation && (
-                          <Badge variant="secondary">
-                            <Text className="text-xs">Ubicación OFF</Text>
-                          </Badge>
-                        )}
-                      </View>
-                    </>
-                  )}
 
                   <View className="flex-row gap-2 items-center">
                     <Button
@@ -449,7 +452,7 @@ export default function PrestacionesPage() {
                       onPress={() => llamarPaciente(prestacion.paciente_telefono)}
                     >
                       <View className="flex-row items-center gap-1">
-                        <Phone size={14} color="#6b7280" />
+                        <Phone size={14} className="text-muted-foreground" />
                         <Text className="text-xs">Llamar</Text>
                       </View>
                     </Button>
@@ -461,7 +464,7 @@ export default function PrestacionesPage() {
                       onPress={() => abrirMapa(prestacion.paciente_direccion, prestacion.ubicacion_paciente_lat, prestacion.ubicacion_paciente_lng)}
                     >
                       <View className="flex-row items-center gap-1">
-                        <MapPin size={14} color="#6b7280" />
+                        <MapPin size={14} className="text-muted-foreground" />
                         <Text className="text-xs">Mapa</Text>
                       </View>
                     </Button>
@@ -470,42 +473,16 @@ export default function PrestacionesPage() {
                       size="sm"
                       className="flex-2"
                       onPress={() => handlePrestacionPress(prestacion)}
-                      // disabled={!puedeCompletarPrestacion(prestacion.fecha)} // VALIDACIÓN COMENTADA
                     >
-                      <Text className="text-xs text-white font-medium">
+                      <Text className="text-xs text-primary-foreground font-medium">
                         Completar
-                        {/* {puedeCompletarPrestacion(prestacion.fecha) ? 'Completar' : 'Esperando hora'} */}
                       </Text>
                     </Button>
                   </View>
 
-                  {/* Debug Info */}
-                  {settings.showDebugInfo && (
-                    <View className="mt-3 p-2 bg-muted rounded">
-                      <Text className="text-xs text-muted-foreground">
-                        Debug: Vencida={isPrestacionVencida(prestacion.fecha).toString()},
-                        SkipTime=DISABLED (validación comentada),
-                        Puede=true (siempre permitido)
-                        {/* SkipTime={settings.skipTimeValidation.toString()},
-                        Puede={puedeCompletarPrestacion(prestacion.fecha).toString()} */}
-                      </Text>
-                    </View>
-                  )}
 
-                  {/* Botón Reset (solo desarrollo) */}
-                  {isDevMode && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="mt-3 self-start"
-                      onPress={() => handleResetPrestacion(prestacion.prestacion_id)}
-                    >
-                      <View className="flex-row items-center gap-1">
-                        <RotateCcw size={12} color="#ef4444" />
-                        <Text className="text-xs text-destructive">Reset (Dev)</Text>
-                      </View>
-                    </Button>
-                  )}
+
+
                 </CardContent>
               </Card>
             ))
@@ -513,31 +490,39 @@ export default function PrestacionesPage() {
         </View>
 
         {/* Prestaciones Completadas */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text variant="h3">Completadas Hoy ({prestacionesCompletadas.length})</Text>
+        <View className="p-6 pt-4">
+          <View className="mb-4">
+            <View className="flex-row items-center">
+              <Text variant="h3">Completadas Hoy (</Text>
+              {loading ? (
+                <Skeleton className="w-5 h-4" />
+              ) : (
+                <Text variant="h3">{prestacionesCompletadas.length}</Text>
+              )}
+              <Text variant="h3">)</Text>
+            </View>
           </View>
 
           {loading ? (
             // Skeleton para prestaciones completadas
             Array.from({ length: 2 }).map((_, index) => (
-              <Card key={`skeleton-completada-${index}`} style={styles.card}>
-                <CardHeader style={styles.cardHeader}>
-                  <View style={styles.skeletonHeader}>
-                    <View style={styles.skeletonLeft}>
-                      <Skeleton style={styles.skeletonTitle} />
-                      <Skeleton style={styles.skeletonSubtitle} />
+              <Card key={`skeleton-completada-${index}`} className="mb-3">
+                <CardHeader className="px-5 pt-5 pb-3">
+                  <View className="flex-row justify-between items-start">
+                    <View className="flex-1 gap-2">
+                      <Skeleton className="w-30 h-4" />
+                      <Skeleton className="w-25 h-3" />
                     </View>
-                    <View style={styles.skeletonRight}>
-                      <Skeleton style={styles.skeletonTime} />
-                      <Skeleton style={styles.skeletonPrice} />
+                    <View className="items-end gap-1">
+                      <Skeleton className="w-15 h-3" />
+                      <Skeleton className="w-20 h-4" />
                     </View>
                   </View>
                 </CardHeader>
-                <CardContent style={styles.cardContent}>
-                  <View style={styles.skeletonContent}>
-                    <Skeleton style={styles.skeletonAddress} />
-                    <Skeleton style={styles.skeletonCompletedBadge} />
+                <CardContent className="px-5 pb-5">
+                  <View className="gap-3">
+                    <Skeleton className="w-4/5 h-3" />
+                    <Skeleton className="w-22 h-6 rounded-full" />
                   </View>
                 </CardContent>
               </Card>
@@ -558,8 +543,8 @@ export default function PrestacionesPage() {
 
                     <View className="items-end gap-2">
                       <Badge variant="default" className="flex-row items-center gap-1">
-                        <CheckCircle size={12} color="#ffffff" />
-                        <Text className="text-xs text-white font-medium">Completada</Text>
+                        <CheckCircle size={12} className="text-primary-foreground" />
+                        <Text className="text-xs text-primary-foreground font-medium">Completada</Text>
                       </Badge>
                       <Text variant="small" className="font-semibold text-green-600">
                         {formatCurrency(prestacion.monto)}
@@ -574,26 +559,12 @@ export default function PrestacionesPage() {
                   </Text>
 
                   <View className="flex-row items-center gap-2 mb-3">
-                    <MapPin size={14} color="#6b7280" />
+                    <MapPin size={14} className="text-muted-foreground" />
                     <Text variant="small" className="text-muted-foreground flex-1">
                       {prestacion.paciente_direccion}
                     </Text>
                   </View>
 
-                  {/* Botón Reset (solo desarrollo) */}
-                  {isDevMode && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="self-start"
-                      onPress={() => handleResetPrestacion(prestacion.prestacion_id)}
-                    >
-                      <View className="flex-row items-center gap-1">
-                        <RotateCcw size={12} color="#ef4444" />
-                        <Text className="text-xs text-destructive">Reset (Dev)</Text>
-                      </View>
-                    </Button>
-                  )}
                 </CardContent>
               </Card>
             )))}
@@ -607,25 +578,7 @@ export default function PrestacionesPage() {
         onSuccess={handleModalSuccess}
       />
 
-      {/* Modal de Confirmación para Resetear */}
-      <AlertDialog open={resetModalOpen} onOpenChange={setResetModalOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Resetear Prestación</AlertDialogTitle>
-            <AlertDialogDescription>
-              ¿Estás seguro que quieres resetear esta prestación a estado pendiente? Esta acción es solo para desarrollo.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>
-              <Text>Cancelar</Text>
-            </AlertDialogCancel>
-            <AlertDialogAction onPress={confirmResetPrestacion}>
-              <Text>Resetear</Text>
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+
 
       {/* Modal de Éxito */}
       <AlertDialog open={successModalOpen} onOpenChange={setSuccessModalOpen}>
@@ -664,253 +617,3 @@ export default function PrestacionesPage() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f8f9fa',
-  },
-  header: {
-    padding: 24,
-    paddingTop: 64,
-    backgroundColor: '#ffffff',
-  },
-  card: {
-    marginHorizontal: 24,
-    marginBottom: 12,
-  },
-  offlineCard: {
-    borderColor: '#f59e0b',
-    backgroundColor: '#fef3c7',
-    marginTop: 16,
-  },
-  offlineContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  offlineText: {
-    flex: 1,
-  },
-  offlineTitle: {
-    color: '#92400e',
-    fontWeight: '500',
-  },
-  offlineSubtitle: {
-    color: '#92400e',
-  },
-  section: {
-    padding: 24,
-    paddingTop: 16,
-  },
-  sectionHeader: {
-    marginBottom: 16,
-  },
-  prestacionCard: {
-    marginBottom: 12,
-  },
-  prestacionVencida: {
-    borderColor: '#f59e0b',
-    backgroundColor: '#fefbf3',
-  },
-  prestacionContent: {
-    padding: 16,
-  },
-  prestacionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 8,
-  },
-  prestacionInfo: {
-    flex: 1,
-  },
-  prestacionTipo: {
-    marginBottom: 2,
-  },
-  pacienteNombre: {
-    color: '#6b7280',
-    fontWeight: '500',
-  },
-  prestacionMeta: {
-    alignItems: 'flex-end',
-    gap: 4,
-  },
-  tiempoContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  tiempo: {
-    color: '#6b7280',
-  },
-  monto: {
-    fontWeight: '600',
-    color: '#059669',
-  },
-  descripcion: {
-    marginBottom: 8,
-  },
-  ubicacionContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginBottom: 12,
-  },
-  direccion: {
-    color: '#6b7280',
-    flex: 1,
-  },
-  prestacionActions: {
-    flexDirection: 'row',
-    gap: 8,
-    alignItems: 'center',
-  },
-  actionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  actionText: {
-    color: '#6b7280',
-    fontSize: 12,
-  },
-  completarText: {
-    color: '#ffffff',
-    fontSize: 12,
-  },
-  resetButton: {
-    marginTop: 8,
-    alignSelf: 'flex-start',
-  },
-  resetText: {
-    color: '#ef4444',
-    fontSize: 12,
-  },
-  estadoBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    gap: 4,
-  },
-  estadoText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  emptyCard: {
-    marginTop: 20,
-  },
-  emptyContent: {
-    alignItems: 'center',
-    paddingVertical: 40,
-  },
-  emptyTitle: {
-    marginTop: 16,
-    marginBottom: 8,
-    color: '#10b981',
-  },
-  devBadgesContainer: {
-    marginTop: 8,
-    marginBottom: 8,
-  },
-  devSeparator: {
-    marginBottom: 8,
-  },
-  devBadges: {
-    flexDirection: 'row',
-    gap: 6,
-    flexWrap: 'wrap',
-  },
-  devBadgeText: {
-    fontSize: 10,
-    fontWeight: '500',
-  },
-  completadaBadge: {
-    backgroundColor: '#10b981',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  // Estilos para skeleton
-  cardHeader: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 12,
-  },
-  cardContent: {
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-  },
-  skeletonHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  skeletonLeft: {
-    flex: 1,
-    gap: 8,
-  },
-  skeletonRight: {
-    alignItems: 'flex-end',
-    gap: 4,
-  },
-  skeletonTitle: {
-    width: 120,
-    height: 18,
-  },
-  skeletonSubtitle: {
-    width: 100,
-    height: 14,
-  },
-  skeletonTime: {
-    width: 60,
-    height: 14,
-  },
-  skeletonPrice: {
-    width: 80,
-    height: 16,
-  },
-  skeletonContent: {
-    gap: 12,
-  },
-  skeletonAddress: {
-    width: '80%',
-    height: 14,
-  },
-  skeletonButtons: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  skeletonButton: {
-    width: 60,
-    height: 32,
-    borderRadius: 6,
-  },
-  skeletonCompletedBadge: {
-    width: 90,
-    height: 24,
-    borderRadius: 12,
-  },
-  // Estilos para indicadores de conectividad
-  headerBadges: {
-    flexDirection: 'row',
-    gap: 8,
-    alignItems: 'center',
-  },
-  connectivityBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  offlineIndicator: {
-    color: '#f59e0b',
-    fontWeight: '500',
-    marginTop: 2,
-  },
-  cacheIndicator: {
-    color: '#6b7280',
-    fontWeight: '500',
-    marginTop: 2,
-  },
-});

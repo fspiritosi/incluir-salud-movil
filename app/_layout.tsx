@@ -5,7 +5,7 @@ import { NAV_THEME } from '../lib/theme';
 import { PortalHost } from '@rn-primitives/portal';
 import { StatusBar } from 'react-native';
 import { DevModeProvider } from '../contexts/DevModeContext';
-import DevModeFloatingButton from '../components/DevModeFloatingButton';
+import ConnectivityBadge from '../components/ConnectivityBadge';
 import "../global.css"
 
 export default function RootLayout() {
@@ -23,7 +23,7 @@ export default function RootLayout() {
                         <Stack.Screen name="register" />
                         <Stack.Screen name="(dashboard)" />
                     </Stack>
-                    <DevModeFloatingButton />
+                    <ConnectivityBadge />
                 </View>
                 <PortalHost />
             </ThemeProvider>

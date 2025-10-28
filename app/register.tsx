@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, ScrollView, StyleSheet, Image } from 'react-native';
+import { View, ScrollView, Image } from 'react-native';
 import { router } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { Session } from '@supabase/supabase-js';
@@ -15,7 +15,7 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '../components/ui/alert-dialog';
-import { ArrowLeft } from 'lucide-react-native';
+
 
 export default function RegisterPage() {
     const [email, setEmail] = useState('');
@@ -89,45 +89,27 @@ export default function RegisterPage() {
 
     return (
         <>
-            <ScrollView style={styles.container}>
-                <View style={styles.content}>
+            <ScrollView className="flex-1 bg-background">
+                <View className="px-6 pt-24">
                     {/* Header */}
-                    <View style={styles.header}>
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            onPress={() => router.back()}
-                        >
-                            <View style={styles.backButton}>
-                                <ArrowLeft size={16} color="#6b7280" />
-                                <Text style={styles.backText}>Volver</Text>
-                            </View>
-                        </Button>
-                        <View style={styles.logoContainer}>
-                            <Image 
-                                source={require('../assets/incluir_salud_iconwebp.png')} 
-                                style={styles.headerLogo}
-                                resizeMode="contain"
-                            />
-                            <Text variant="h3" style={styles.headerTitle}>Incluir Salud</Text>
-                        </View>
-                        <View style={styles.spacer} />
-                    </View>
-
-                    {/* Welcome Text */}
-                    <View style={styles.welcome}>
-                        <Text variant="h2" style={styles.welcomeTitle}>
-                            Crear Cuenta
+                    <View className="items-center mb-12">
+                        <Image
+                            source={require('../assets/incluir_salud_iconwebp.png')}
+                            className="w-20 h-20 mb-4"
+                            resizeMode="contain"
+                        />
+                        <Text variant="h1" className="text-blue-500 font-bold text-center">
+                            Incluir Salud
                         </Text>
-                        <Text variant="muted" style={styles.welcomeSubtitle}>
+                      <Text variant="muted" className="text-center">
                             Únete a Incluir Salud y transforma tu práctica médica
                         </Text>
                     </View>
 
                     {/* Register Form */}
-                    <View style={styles.form}>
-                        <View style={styles.inputGroup}>
-                            <Text variant="small" style={styles.label}>Email</Text>
+                    <View className="mb-8">
+                        <View className="mb-4">
+                            <Text variant="small" className="mb-2">Email</Text>
                             <Input
                                 onChangeText={(text: string) => setEmail(text)}
                                 value={email}
@@ -137,8 +119,8 @@ export default function RegisterPage() {
                             />
                         </View>
 
-                        <View style={styles.inputGroup}>
-                            <Text variant="small" style={styles.label}>Contraseña</Text>
+                        <View className="mb-4">
+                            <Text variant="small" className="mb-2">Contraseña</Text>
                             <Input
                                 onChangeText={(text: string) => setPassword(text)}
                                 value={password}
@@ -148,8 +130,8 @@ export default function RegisterPage() {
                             />
                         </View>
 
-                        <View style={styles.inputGroup}>
-                            <Text variant="small" style={styles.label}>Confirmar Contraseña</Text>
+                        <View className="mb-4">
+                            <Text variant="small" className="mb-2">Confirmar Contraseña</Text>
                             <Input
                                 onChangeText={(text: string) => setConfirmPassword(text)}
                                 value={confirmPassword}
@@ -162,14 +144,16 @@ export default function RegisterPage() {
                         <Button
                             disabled={loading}
                             onPress={signUpWithEmail}
-                            style={styles.registerButton}
+                            className="mt-4"
                         >
-                            <Text>{loading ? 'Creando cuenta...' : 'Crear Cuenta'}</Text>
+                            <Text className="text-primary-foreground font-medium">
+                                {loading ? 'Creando cuenta...' : 'Crear Cuenta'}
+                            </Text>
                         </Button>
                     </View>
 
                     {/* Login Link */}
-                    <View style={styles.loginLink}>
+                    <View className="flex-row items-center justify-center gap-2">
                         <Text variant="muted">¿Ya tienes cuenta?</Text>
                         <Button
                             variant="link"
@@ -218,71 +202,3 @@ export default function RegisterPage() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#ffffff',
-    },
-    content: {
-        paddingHorizontal: 24,
-        paddingTop: 64,
-    },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginBottom: 32,
-    },
-    logoContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    headerLogo: {
-        width: 32,
-        height: 32,
-    },
-    headerTitle: {
-        color: '#3b82f6',
-        fontWeight: '600',
-    },
-    spacer: {
-        width: 64,
-    },
-    welcome: {
-        marginBottom: 32,
-    },
-    welcomeTitle: {
-        textAlign: 'center',
-        marginBottom: 8,
-    },
-    welcomeSubtitle: {
-        textAlign: 'center',
-    },
-    form: {
-        marginBottom: 32,
-    },
-    inputGroup: {
-        marginBottom: 16,
-    },
-    label: {
-        marginBottom: 8,
-    },
-    registerButton: {
-        marginTop: 16,
-    },
-    loginLink: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-    },
-    backButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
-    },
-    backText: {
-        color: '#6b7280',
-    },
-});

@@ -1,33 +1,27 @@
 import React, { useState, useEffect } from 'react';
-import { View, ScrollView, StyleSheet, RefreshControl, Platform, Image } from 'react-native';
+import { View, ScrollView, RefreshControl, Platform, Image } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import { Session } from '@supabase/supabase-js';
 import { Text } from '../../components/ui/text';
-import { Card, CardContent, CardHeader } from '../../components/ui/card';
+import { Card, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { FileText, Settings, TrendingUp, Calendar, DollarSign, ChevronRight } from 'lucide-react-native';
-import { prestacionService } from '../../services/prestacionService';
-
-interface Prestacion {
-    id: string;
-    tipo_prestacion: string;
-    fecha: string;
-    estado: string;
-    monto: number;
-    descripcion: string;
-    obra_social: {
-        nombre: string;
-    };
-}
+import { Skeleton } from '../../components/ui/skeleton';
+import { FileText, Settings, CheckCircle, Clock, Building2 } from 'lucide-react-native';
+import { prestacionService, PrestacionCompleta } from '../../services/prestacionService';
+import { useConnectivity } from '../../services/connectivityService';
 
 export default function DashboardPage() {
     const insets = useSafeAreaInsets();
+    const connectivity = useConnectivity();
     const [session, setSession] = useState<Session | null>(null);
-    const [prestaciones, setPrestaciones] = useState<Prestacion[]>([]);
+    const [prestacionesCompletadas, setPrestacionesCompletadas] = useState<PrestacionCompleta[]>([]);
+    const [prestacionesPendientes, setPrestacionesPendientes] = useState<PrestacionCompleta[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+
+    const [isOffline, setIsOffline] = useState(false);
 
     useEffect(() => {
         supabase.auth.getSession().then(({ data: { session } }) => {
@@ -49,99 +43,79 @@ export default function DashboardPage() {
 
     useEffect(() => {
         if (session) {
-            loadPrestaciones();
+            loadDashboardData();
         }
     }, [session]);
 
-    const loadPrestaciones = async () => {
+    const loadDashboardData = async (forceRefresh: boolean = false) => {
         try {
             setLoading(true);
 
-            // Por ahora usamos datos mockeados ya que no tenemos prestaciones reales del usuario
-            const mockPrestaciones: Prestacion[] = [
-                {
-                    id: '1',
-                    tipo_prestacion: 'consulta',
-                    fecha: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-                    estado: 'completada',
-                    monto: 2500,
-                    descripcion: 'Consulta cardiológica',
-                    obra_social: { nombre: 'OSDE' }
-                },
-                {
-                    id: '2',
-                    tipo_prestacion: 'laboratorio',
-                    fecha: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-                    estado: 'pendiente',
-                    monto: 1800,
-                    descripcion: 'Análisis de sangre completo',
-                    obra_social: { nombre: 'Swiss Medical' }
-                },
-                {
-                    id: '3',
-                    tipo_prestacion: 'diagnostico',
-                    fecha: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
-                    estado: 'completada',
-                    monto: 4200,
-                    descripcion: 'Resonancia magnética',
-                    obra_social: { nombre: 'Galeno' }
-                },
-                {
-                    id: '4',
-                    tipo_prestacion: 'consulta',
-                    fecha: new Date(Date.now() - 12 * 24 * 60 * 60 * 1000).toISOString(),
-                    estado: 'completada',
-                    monto: 3200,
-                    descripcion: 'Consulta neurológica',
-                    obra_social: { nombre: 'Omint' }
-                },
-                {
-                    id: '5',
-                    tipo_prestacion: 'control',
-                    fecha: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString(),
-                    estado: 'completada',
-                    monto: 1500,
-                    descripcion: 'Control post-operatorio',
-                    obra_social: { nombre: 'Unión Personal' }
-                }
-            ];
+            // Primero intentar cargar datos del día actual (con cache)
+            const datosDelDia = await prestacionService.obtenerPrestacionesDelDia(undefined, forceRefresh);
 
-            setPrestaciones(mockPrestaciones);
+            // Luego cargar datos del mes completo
+            const datosMensuales = await prestacionService.obtenerPrestacionesDelMes();
+
+            // Ordenar por fecha (más recientes primero)
+            const completadasOrdenadas = datosMensuales.completadas
+                .sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
+
+            const pendientesOrdenadas = datosMensuales.pendientes
+                .sort((a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime());
+
+            setPrestacionesCompletadas(completadasOrdenadas);
+            setPrestacionesPendientes(pendientesOrdenadas);
+
+            setIsOffline(datosDelDia.isOffline);
+
+            // Si es offline y hay datos, mostrar mensaje informativo
+            if (datosDelDia.isOffline && datosDelDia.isFromCache) {
+                console.log('📱 Dashboard en modo offline - mostrando datos guardados');
+            }
         } catch (error) {
-            console.error('Error loading prestaciones:', error);
+            console.error('Error loading dashboard data:', error);
+
+            // Si falla, intentar usar solo cache del día actual
+            if (!connectivity.isConnected) {
+                try {
+                    const datosDelDia = await prestacionService.obtenerPrestacionesDelDia(undefined, false);
+                    if (datosDelDia.isFromCache) {
+                        setPrestacionesCompletadas(datosDelDia.completadas);
+                        setPrestacionesPendientes(datosDelDia.pendientes);
+
+                        setIsOffline(true);
+                        console.log('📱 Dashboard usando solo cache del día actual');
+                    }
+                } catch (cacheError) {
+                    console.error('Error usando cache:', cacheError);
+                }
+            }
         } finally {
             setLoading(false);
             setRefreshing(false);
         }
     };
 
-    const onRefresh = () => {
+    const onRefresh = async () => {
         setRefreshing(true);
-        loadPrestaciones();
-    };
 
-    const getEstadoColor = (estado: string) => {
-        switch (estado) {
-            case 'completada': return '#10b981';
-            case 'pendiente': return '#f59e0b';
-            case 'cancelada': return '#ef4444';
-            default: return '#6b7280';
+        if (connectivity.isConnected) {
+            // Si hay conexión, forzar actualización
+            await loadDashboardData(true);
+        } else {
+            // Si no hay conexión, solo recargar desde cache
+            await loadDashboardData(false);
         }
     };
 
-    const formatCurrency = (amount: number) => {
-        return new Intl.NumberFormat('es-AR', {
-            style: 'currency',
-            currency: 'ARS'
-        }).format(amount);
-    };
 
     const formatDate = (dateString: string) => {
-        return new Date(dateString).toLocaleDateString('es-AR', {
-            day: '2-digit',
-            month: '2-digit',
-            year: 'numeric'
-        });
+        return prestacionService.formatearFecha(dateString, 'DD/MM/YYYY');
+    };
+
+    const formatTime = (dateString: string) => {
+        return prestacionService.formatearFecha(dateString, 'HH:mm');
     };
 
     if (!session) {
@@ -155,7 +129,7 @@ export default function DashboardPage() {
 
     return (
         <ScrollView
-            style={styles.container}
+            className="flex-1 bg-background"
             contentContainerStyle={{
                 paddingBottom: Platform.OS === 'android' ? 70 + Math.max(insets.bottom, 0) + 20 : 90
             }}
@@ -164,49 +138,53 @@ export default function DashboardPage() {
             }
         >
             {/* Header */}
-            <View style={styles.header}>
-                <View style={styles.welcomeContainer}>
-                    <View style={styles.welcomeText}>
-<View style={{ flexDirection: 'row', justifyContent:'space-between', alignItems: 'center', gap: 12 }}>
-                        <Text variant="h2" style={styles.welcome}>
-                            ¡Hola, {userName}!
-                        </Text>
-                        <Image
-                        source={require('../../assets/incluir_salud_iconwebp.png')}
-                        style={styles.headerLogo}
-                        resizeMode="contain"
-                        />
+            <View className="p-6 pt-16 bg-card">
+                <View className="flex-row items-center gap-3">
+                    <View className="flex-1">
+                        <View className="flex-row justify-between items-center gap-3">
+                            <Text variant="h2" className="mb-1">
+                                ¡Hola, {userName}!
+                            </Text>
+                            <Image
+                                source={require('../../assets/incluir_salud_iconwebp.png')}
+                                className="w-12 h-12"
+                                resizeMode="contain"
+                            />
                         </View>
                         <Text variant="muted">
                             Bienvenido a tu panel de control
                         </Text>
+                        {/* Indicador de estado */}
+                        {isOffline && (
+                            <Text variant="small" className="text-amber-600 font-medium mt-0.5">
+                                📱 Modo offline - Datos guardados
+                            </Text>
+                        )}
                     </View>
                 </View>
             </View>
 
-            {/* Stats Cards */}
-            <View style={styles.statsContainer}>
-                <Card style={styles.statCard}>
-                    <CardContent style={styles.statContent}>
-                        <Text variant="h3" style={styles.statNumber}>12</Text>
-                        <Text variant="small" style={styles.statLabel}>Prestaciones</Text>
-                        <Text variant="small" style={styles.statLabel}>este mes</Text>
-                    </CardContent>
-                </Card>
-
-                <Card style={styles.statCard}>
-                    <CardContent style={styles.statContent}>
-                        <Text variant="h3" style={styles.statNumber}>$45.200</Text>
-                        <Text variant="small" style={styles.statLabel}>Facturado</Text>
-                        <Text variant="small" style={styles.statLabel}>este mes</Text>
-                    </CardContent>
-                </Card>
-            </View>
-
-            {/* Recent Prestaciones */}
-            <View style={styles.section}>
-                <View style={styles.sectionHeader}>
-                    <Text variant="h3">Prestaciones Recientes</Text>
+            {/* Prestaciones Completadas */}
+            <View className="p-6">
+                <View className="flex-row items-center gap-2 mb-2">
+                    <CheckCircle size={24} className="text-green-500" />
+                    <View className="flex-row items-center">
+                        <Text variant="h3">
+                            Prestaciones Completadas (
+                        </Text>
+                        {loading ? (
+                            <Skeleton className="w-5 h-4" />
+                        ) : (
+                            <Text variant="h3">
+                                {prestacionesCompletadas.length}
+                            </Text>
+                        )}
+                        <Text variant="h3">
+                            )
+                        </Text>
+                    </View>
+                </View>
+                <View className="items-end mb-4">
                     <Button
                         variant="ghost"
                         size="sm"
@@ -216,59 +194,195 @@ export default function DashboardPage() {
                     </Button>
                 </View>
 
-                {prestaciones.slice(0, 3).map((prestacion) => (
-                    <Card key={prestacion.id} style={styles.prestacionCard}>
-                        <CardContent style={styles.prestacionContent}>
-                            <View style={styles.prestacionHeader}>
-                                <Text variant="large" style={styles.prestacionTipo}>
-                                    {prestacion.tipo_prestacion.charAt(0).toUpperCase() + prestacion.tipo_prestacion.slice(1)}
-                                </Text>
-                                <View style={[styles.estadoBadge, { backgroundColor: getEstadoColor(prestacion.estado) }]}>
-                                    <Text style={styles.estadoText}>
-                                        {prestacion.estado.charAt(0).toUpperCase() + prestacion.estado.slice(1)}
-                                    </Text>
+                {loading ? (
+                    // Skeleton para prestaciones completadas
+                    Array.from({ length: 2 }).map((_, index) => (
+                        <Card key={`skeleton-completadas-${index}`} className="mb-3">
+                            <CardContent className="p-4">
+                                <View className="flex-row justify-between items-start mb-2">
+                                    <Skeleton className="w-30 h-4 mb-1" />
+                                    <Skeleton className="w-25 h-3" />
                                 </View>
-                            </View>
-
-                            <Text variant="muted" style={styles.prestacionDesc}>
-                                {prestacion.descripcion}
+                                <Skeleton className="w-full h-4 mb-2" />
+                                <Skeleton className="w-38 h-3" />
+                            </CardContent>
+                        </Card>
+                    ))
+                ) : prestacionesCompletadas.length === 0 ? (
+                    <Card className="mt-5">
+                        <CardContent className="items-center py-10">
+                            <CheckCircle size={48} className="text-green-500" />
+                            <Text variant="large" className="mt-4 mb-2 text-foreground text-center">
+                                No hay prestaciones completadas este mes
                             </Text>
-
-                            <View style={styles.prestacionFooter}>
-                                <Text variant="small">{prestacion.obra_social.nombre}</Text>
-                                <Text variant="small">{formatDate(prestacion.fecha)}</Text>
-                                <Text variant="small" style={styles.monto}>
-                                    {formatCurrency(prestacion.monto)}
-                                </Text>
-                            </View>
+                            <Text variant="muted">
+                                Las prestaciones completadas aparecerán aquí
+                            </Text>
                         </CardContent>
                     </Card>
-                ))}
+                ) : (
+                    prestacionesCompletadas.slice(0, 5).map((prestacion) => (
+                        <Card key={prestacion.prestacion_id} className="mb-3">
+                            <CardContent className="p-4">
+                                <View className="flex-row justify-between items-start mb-2">
+                                    <View className="flex-1">
+                                        <Text variant="large" className="mb-0.5">
+                                            {prestacion.tipo_prestacion.charAt(0).toUpperCase() + prestacion.tipo_prestacion.slice(1)}
+                                        </Text>
+                                        <Text variant="small" className="text-muted-foreground font-medium">
+                                            {prestacion.paciente_nombre}
+                                        </Text>
+                                    </View>
+                                    <View className="items-end gap-1">
+                                        <View className="flex-row items-center gap-1">
+                                            <Clock size={14} className="text-muted-foreground" />
+                                            <Text variant="small" className="text-muted-foreground">
+                                                {formatTime(prestacion.fecha)}
+                                            </Text>
+                                        </View>
+                                        <Text variant="small" className="text-muted-foreground text-xs">
+                                            {formatDate(prestacion.fecha)}
+                                        </Text>
+                                    </View>
+                                </View>
+
+                                <Text variant="muted" className="mb-3">
+                                    {prestacion.descripcion}
+                                </Text>
+
+                                <View className="flex-row items-center gap-1 mt-1">
+                                    <Building2 size={14} className="text-muted-foreground" />
+                                    <Text variant="small" className="text-muted-foreground italic">
+                                        {prestacion.obra_social}
+                                    </Text>
+                                </View>
+                            </CardContent>
+                        </Card>
+                    ))
+                )}
+            </View>
+
+            {/* Prestaciones Pendientes */}
+            <View className="p-6">
+                <View className="flex-row items-center gap-2 mb-2">
+                    <Clock size={24} className="text-amber-500" />
+                    <View className="flex-row items-center">
+                        <Text variant="h3">
+                            Prestaciones Pendientes (
+                        </Text>
+                        {loading ? (
+                            <Skeleton className="w-5 h-4" />
+                        ) : (
+                            <Text variant="h3">
+                                {prestacionesPendientes.length}
+                            </Text>
+                        )}
+                        <Text variant="h3">
+                            )
+                        </Text>
+                    </View>
+                </View>
+                <View className="items-end mb-4">
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        onPress={() => router.push('/(dashboard)/prestaciones')}
+                    >
+                        <Text>Ver todas</Text>
+                    </Button>
+                </View>
+
+                {loading ? (
+                    // Skeleton para prestaciones pendientes
+                    Array.from({ length: 3 }).map((_, index) => (
+                        <Card key={`skeleton-pendientes-${index}`} className="mb-3">
+                            <CardContent className="p-4">
+                                <View className="flex-row justify-between items-start mb-2">
+                                    <Skeleton className="w-30 h-4 mb-1" />
+                                    <Skeleton className="w-25 h-3" />
+                                </View>
+                                <Skeleton className="w-full h-4 mb-2" />
+                                <Skeleton className="w-38 h-3" />
+                            </CardContent>
+                        </Card>
+                    ))
+                ) : prestacionesPendientes.length === 0 ? (
+                    <Card className="mt-5">
+                        <CardContent className="items-center py-10">
+                            <Clock size={48} className="text-amber-500" />
+                            <Text variant="large" className="mt-4 mb-2 text-foreground text-center">
+                                No hay prestaciones pendientes este mes
+                            </Text>
+                            <Text variant="muted">
+                                ¡Excelente! No tienes prestaciones pendientes
+                            </Text>
+                        </CardContent>
+                    </Card>
+                ) : (
+                    prestacionesPendientes.slice(0, 5).map((prestacion) => (
+                        <Card key={prestacion.prestacion_id} className="mb-3">
+                            <CardContent className="p-4">
+                                <View className="flex-row justify-between items-start mb-2">
+                                    <View className="flex-1">
+                                        <Text variant="large" className="mb-0.5">
+                                            {prestacion.tipo_prestacion.charAt(0).toUpperCase() + prestacion.tipo_prestacion.slice(1)}
+                                        </Text>
+                                        <Text variant="small" className="text-muted-foreground font-medium">
+                                            {prestacion.paciente_nombre}
+                                        </Text>
+                                    </View>
+                                    <View className="items-end gap-1">
+                                        <View className="flex-row items-center gap-1">
+                                            <Clock size={14} className="text-muted-foreground" />
+                                            <Text variant="small" className="text-muted-foreground">
+                                                {formatTime(prestacion.fecha)}
+                                            </Text>
+                                        </View>
+                                        <Text variant="small" className="text-muted-foreground text-xs">
+                                            {formatDate(prestacion.fecha)}
+                                        </Text>
+                                    </View>
+                                </View>
+
+                                <Text variant="muted" className="mb-3">
+                                    {prestacion.descripcion}
+                                </Text>
+
+                                <View className="flex-row items-center gap-1 mt-1">
+                                    <Building2 size={14} className="text-muted-foreground" />
+                                    <Text variant="small" className="text-muted-foreground italic">
+                                        {prestacion.obra_social}
+                                    </Text>
+                                </View>
+                            </CardContent>
+                        </Card>
+                    ))
+                )}
             </View>
 
             {/* Quick Actions */}
-            <View style={styles.section}>
-                <Text variant="h3" style={styles.sectionTitle}>Acciones Rápidas</Text>
+            <View className="p-6">
+                <Text variant="h3" className="mb-4">Acciones Rápidas</Text>
 
-                <View style={styles.actionsContainer}>
+                <View className="gap-3">
                     <Button
-                        style={styles.actionButton}
+                        className="w-full"
                         onPress={() => router.push('/(dashboard)/prestaciones')}
                     >
-                        <View style={styles.buttonContent}>
-                            <FileText size={20} color="#ffffff" />
-                            <Text style={styles.buttonText}>Ver Prestaciones</Text>
+                        <View className="flex-row items-center gap-2">
+                            <FileText size={20} className="text-primary-foreground" />
+                            <Text className="text-primary-foreground font-medium">Ver Prestaciones</Text>
                         </View>
                     </Button>
 
                     <Button
                         variant="outline"
-                        style={styles.actionButton}
+                        className="w-full"
                         onPress={() => router.push('/(dashboard)/perfil')}
                     >
-                        <View style={styles.buttonContent}>
-                            <Settings size={20} color="#000000" />
-                            <Text style={styles.buttonTextOutline}>Configurar Perfil</Text>
+                        <View className="flex-row items-center gap-2">
+                            <Settings size={20} className="text-foreground" />
+                            <Text className="text-foreground font-medium">Configurar Perfil</Text>
                         </View>
                     </Button>
                 </View>
@@ -277,117 +391,3 @@ export default function DashboardPage() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#f8f9fa',
-    },
-    header: {
-        padding: 24,
-        paddingTop: 64,
-        backgroundColor: '#ffffff',
-    },
-    welcomeContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-    },
-    headerLogo: {
-        width: 60,
-        height: 60,
-    },
-    welcomeText: {
-        flex: 1,
-    },
-    welcome: {
-        marginBottom: 4,
-    },
-    statsContainer: {
-        flexDirection: 'row',
-        paddingHorizontal: 24,
-        paddingTop: 24,
-        gap: 16,
-    },
-    statCard: {
-        flex: 1,
-    },
-    statContent: {
-        alignItems: 'center',
-        paddingVertical: 20,
-    },
-    statNumber: {
-        marginBottom: 4,
-        color: '#059669',
-    },
-    statLabel: {
-        textAlign: 'center',
-    },
-    section: {
-        padding: 24,
-    },
-    sectionHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 16,
-    },
-    sectionTitle: {
-        marginBottom: 16,
-    },
-    prestacionCard: {
-        marginBottom: 12,
-    },
-    prestacionContent: {
-        padding: 16,
-    },
-    prestacionHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 8,
-    },
-    prestacionTipo: {
-        flex: 1,
-    },
-    estadoBadge: {
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 12,
-    },
-    estadoText: {
-        color: '#ffffff',
-        fontSize: 12,
-        fontWeight: '500',
-    },
-    prestacionDesc: {
-        marginBottom: 12,
-    },
-    prestacionFooter: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-    },
-    monto: {
-        fontWeight: '600',
-        color: '#059669',
-    },
-    actionsContainer: {
-        gap: 12,
-    },
-    actionButton: {
-        width: '100%',
-    },
-    buttonContent: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    buttonText: {
-        color: '#ffffff',
-        fontWeight: '500',
-    },
-    buttonTextOutline: {
-        color: '#000000',
-        fontWeight: '500',
-    },
-});

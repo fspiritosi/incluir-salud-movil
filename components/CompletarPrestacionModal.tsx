@@ -99,7 +99,7 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
         ubicacion.latitude,
         ubicacion.longitude,
         notas,
-        { skipLocationValidation: settings.skipLocationValidation }
+
       );
 
       if (resultado.exito) {
