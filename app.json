@@ -1,0 +1,68 @@
+{
+  "expo": {
+    "name": "Incluir",
+    "slug": "incluir-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/incluir_salud_iconwebp.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "scheme": "incluir",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.incluir.app",
+      "usesNonExemptEncryption": false
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/incluir_salud_iconwebp.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "package": "com.incluir.app",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/incluir_salud_iconwebp.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Esta aplicación necesita acceso a la ubicación para validar las prestaciones."
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "fa5be556-ac2f-44d0-ae93-202d1de13e30"
+      }
+    },
+    "owner": "yordanpz",
+    "runtimeVersion": "1.0.0",
+    "updates": {
+      "url": "https://u.expo.dev/fa5be556-ac2f-44d0-ae93-202d1de13e30"
+    }
+  }
+}
