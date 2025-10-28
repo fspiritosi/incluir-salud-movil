@@ -29,10 +29,15 @@ jobs:
         uses: expo/expo-github-action@v8
         with:
           eas-version: latest
-          token: FPCIhesbuZsvpxQHTq5UoXToBe4ConUOj_oh8r8Pese
+          token: FPCIhesbuZsvpxQHTq5UoXToBe4ConUOj_oh8r8P
 
       - name: Install dependencies
         run: npm install
 
-      - name: Create update
-        run: npm run update
+      - name: Bump version
+        run: npm version patch --no-git-tag-version
+
+      - name: Create EAS update
+        env:
+          EXPO_TOKEN: FPCIhesbuZsvpxQHTq5UoXToBe4ConUOj_oh8r8P
+        run: eas update --branch preview --message "${{ github.event.head_commit.message }}"
