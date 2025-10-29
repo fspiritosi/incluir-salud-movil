@@ -12,7 +12,6 @@ import { Skeleton } from '../../components/ui/skeleton';
 import {
   AlertDialog,
   AlertDialogAction,
-  AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
@@ -246,7 +245,7 @@ export default function PrestacionesPage() {
 
   const abrirMapa = (direccion: string, lat?: number, lng?: number) => {
     let url: string;
-    
+
     if (lat && lng) {
       // Si tenemos coordenadas, usarlas con la dirección como etiqueta
       const direccionEncoded = encodeURIComponent(direccion);
@@ -256,7 +255,7 @@ export default function PrestacionesPage() {
       const direccionEncoded = encodeURIComponent(direccion);
       url = `https://maps.google.com/?q=${direccionEncoded}`;
     }
-    
+
     Linking.openURL(url);
   };
 
@@ -286,26 +285,26 @@ export default function PrestacionesPage() {
           <View className="flex-row justify-between items-center mb-4">
             <View className="flex-1">
               <Text variant="h2">
-                {dateFilter === 'today' ? 'Prestaciones de Hoy' : 
-                 dateFilter === 'month' ? 'Prestaciones del Mes' : 
-                 'Prestaciones Personalizadas'}
+                {dateFilter === 'today' ? 'Prestaciones de Hoy' :
+                  dateFilter === 'month' ? 'Prestaciones del Mes' :
+                    'Prestaciones Personalizadas'}
               </Text>
               <Text variant="muted">
-                {dateFilter === 'today' 
+                {dateFilter === 'today'
                   ? prestacionService.obtenerFechaActualArgentina().format('dddd, D [de] MMMM [de] YYYY')
                   : dateFilter === 'month'
-                  ? prestacionService.obtenerFechaActualArgentina().format('MMMM [de] YYYY')
-                  : customDateRange 
-                  ? `${prestacionService.obtenerFechaActualArgentina().set({
-                      year: customDateRange.start.getFullYear(),
-                      month: customDateRange.start.getMonth(),
-                      date: customDateRange.start.getDate()
-                    }).format('DD/MM/YYYY')} - ${prestacionService.obtenerFechaActualArgentina().set({
-                      year: customDateRange.end.getFullYear(),
-                      month: customDateRange.end.getMonth(),
-                      date: customDateRange.end.getDate()
-                    }).format('DD/MM/YYYY')}`
-                  : 'Selecciona un rango de fechas'
+                    ? prestacionService.obtenerFechaActualArgentina().format('MMMM [de] YYYY')
+                    : customDateRange
+                      ? `${prestacionService.obtenerFechaActualArgentina().set({
+                        year: customDateRange.start.getFullYear(),
+                        month: customDateRange.start.getMonth(),
+                        date: customDateRange.start.getDate()
+                      }).format('DD/MM/YYYY')} - ${prestacionService.obtenerFechaActualArgentina().set({
+                        year: customDateRange.end.getFullYear(),
+                        month: customDateRange.end.getMonth(),
+                        date: customDateRange.end.getDate()
+                      }).format('DD/MM/YYYY')}`
+                      : 'Selecciona un rango de fechas'
                 }
               </Text>
               {/* Indicador de estado */}
@@ -316,7 +315,7 @@ export default function PrestacionesPage() {
               )}
             </View>
           </View>
-          
+
           {/* Filtro de fechas */}
           <DateFilter
             selectedFilter={dateFilter}
