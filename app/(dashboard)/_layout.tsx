@@ -1,11 +1,11 @@
 import { Tabs } from 'expo-router';
-import { Home, FileText, User } from 'lucide-react-native';
+import { BarChart3, FileText, Home, User } from 'lucide-react-native';
 import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function DashboardLayout() {
   const insets = useSafeAreaInsets();
-  
+
   return (
     <Tabs
       screenOptions={{
@@ -43,6 +43,15 @@ export default function DashboardLayout() {
           title: 'Prestaciones',
           tabBarIcon: ({ color, size }) => (
             <FileText size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="reportes"
+        options={{
+          title: 'Reportes',
+          tabBarIcon: ({ color, size }) => (
+            <BarChart3 size={size} color={color} />
           ),
         }}
       />

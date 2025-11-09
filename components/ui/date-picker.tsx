@@ -1,9 +1,8 @@
-import React, { useState } from 'react';
-import { View, TextInput } from 'react-native';
-import { Button } from './button';
-import { Text } from './text';
 import { cn } from '@/lib/utils';
 import moment from 'moment-timezone';
+import React, { useEffect, useState } from 'react';
+import { TextInput, View } from 'react-native';
+import { Text } from './text';
 
 export interface DatePickerProps {
   date: Date;
@@ -26,6 +25,13 @@ export function DatePickerComponent({
 }: DatePickerProps) {
   const [dateText, setDateText] = useState(moment(date).format('DD/MM/YYYY'));
   const [isEditing, setIsEditing] = useState(false);
+
+  // Sincronizar el texto del input cuando cambia la prop date (por ejemplo, al usar presets)
+  useEffect(() => {
+    if (!isEditing) {
+      setDateText(moment(date).format('DD/MM/YYYY'));
+    }
+  }, [date, isEditing]);
 
   const handleDateTextChange = (text: string) => {
     setDateText(text);
@@ -140,7 +146,7 @@ export function DateRangePicker({
           Rango seleccionado:
         </Text>
         <Text variant="small" className="font-medium">
-          {moment(startDate).format('DD/MM/YYYY')} - {moment(endDate).format('DD/MM/YYYY')}
+          {`${moment(startDate).format('DD/MM/YYYY')} - ${moment(endDate).format('DD/MM/YYYY')}`}
         </Text>
         <Text variant="small" className="text-muted-foreground mt-1">
           {moment(endDate).diff(moment(startDate), 'days') + 1} días

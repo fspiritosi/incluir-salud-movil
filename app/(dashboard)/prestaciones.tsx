@@ -1,14 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import { View, ScrollView, RefreshControl, Linking, Platform } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useConnectivity } from '../../services/connectivityService';
-import { router } from 'expo-router';
-import { supabase } from '../../lib/supabase';
 import { Session } from '@supabase/supabase-js';
-import { Text } from '../../components/ui/text';
-import { Card, CardContent, CardHeader } from '../../components/ui/card';
-import { Button } from '../../components/ui/button';
-import { Skeleton } from '../../components/ui/skeleton';
+import { router } from 'expo-router';
+import {
+  CheckCircle,
+  Clock,
+  MapPin,
+  Phone,
+  Wifi,
+  WifiOff
+} from 'lucide-react-native';
+import moment from 'moment-timezone';
+import React, { useEffect, useState } from 'react';
+import { Linking, Platform, RefreshControl, ScrollView, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import CompletarPrestacionModal from '../../components/CompletarPrestacionModal';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,25 +22,22 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '../../components/ui/alert-dialog';
+import { Button } from '../../components/ui/button';
+import { Card, CardContent, CardHeader } from '../../components/ui/card';
+import { DateFilter, DateFilterType, DateRange } from '../../components/ui/date-filter';
+import { Skeleton } from '../../components/ui/skeleton';
+import { Text } from '../../components/ui/text';
+import { supabase } from '../../lib/supabase';
+import { useConnectivity } from '../../services/connectivityService';
 import {
-  Clock,
-  CheckCircle,
-  MapPin,
-  Phone,
-  WifiOff,
-  Wifi
-} from 'lucide-react-native';
-import {
+  ObtenerPrestacionesMesResult,
+  ObtenerPrestacionesRangoResult,
+  ObtenerPrestacionesResult,
   PrestacionCompleta,
   prestacionService,
-  ObtenerPrestacionesResult,
-  ObtenerPrestacionesRangoResult,
-  ObtenerPrestacionesMesResult,
   SincronizacionCompletaResult,
   SincronizacionResult
 } from '../../services/prestacionService';
-import { DateFilter, DateFilterType, DateRange } from '../../components/ui/date-filter';
-import CompletarPrestacionModal from '../../components/CompletarPrestacionModal';
 
 
 
@@ -239,6 +240,19 @@ export default function PrestacionesPage() {
     return prestacionService.formatearFecha(dateString, 'HH:mm');
   };
 
+  const formatDayAndTime = (dateString: string) => {
+    // Usar calendar() de moment para mostrar fechas relativas
+    // Ejemplos: "Hoy 10:30", "Ayer 14:00", "12/10"
+    const TIMEZONE = 'America/Argentina/Buenos_Aires';
+    const fecha = moment.tz(dateString, TIMEZONE);
+    return fecha.calendar(null, {
+      sameDay: '[Hoy] HH:mm',
+      lastDay: '[Ayer] HH:mm',
+      lastWeek: 'DD/MM',
+      sameElse: 'DD/MM'
+    });
+  };
+
   const llamarPaciente = (telefono: string) => {
     Linking.openURL(`tel:${telefono}`);
   };
@@ -261,6 +275,20 @@ export default function PrestacionesPage() {
 
   const isPrestacionVencida = (fecha: string) => {
     return prestacionService.esFechaVencida(fecha);
+  };
+
+  const isPrestacionDeHoy = (fecha: string) => {
+    const fechaPrestacion = prestacionService.obtenerFechaActualArgentina().set({
+      year: new Date(fecha).getFullYear(),
+      month: new Date(fecha).getMonth(),
+      date: new Date(fecha).getDate(),
+      hour: 0,
+      minute: 0,
+      second: 0,
+      millisecond: 0
+    });
+    const hoy = prestacionService.obtenerFechaActualArgentina().startOf('day');
+    return fechaPrestacion.isSame(hoy, 'day');
   };
 
 
@@ -421,7 +449,7 @@ export default function PrestacionesPage() {
                       <View className="flex-row items-center gap-1">
                         <Clock size={14} className="text-muted-foreground" />
                         <Text variant="small" className="text-muted-foreground">
-                          {formatTime(prestacion.fecha)}
+                          {formatDayAndTime(prestacion.fecha)}
                         </Text>
                       </View>
                       <Text variant="small" className="font-semibold text-green-600">
@@ -468,15 +496,18 @@ export default function PrestacionesPage() {
                       </View>
                     </Button>
 
-                    <Button
-                      size="sm"
-                      className="flex-2"
-                      onPress={() => handlePrestacionPress(prestacion)}
-                    >
-                      <Text className="text-xs text-primary-foreground font-medium">
-                        Completar
-                      </Text>
-                    </Button>
+                    {/* Solo mostrar botón Completar si la prestación es de HOY */}
+                    {isPrestacionDeHoy(prestacion.fecha) && (
+                      <Button
+                        size="sm"
+                        className="flex-2"
+                        onPress={() => handlePrestacionPress(prestacion)}
+                      >
+                        <Text className="text-xs text-primary-foreground font-medium">
+                          Completar
+                        </Text>
+                      </Button>
+                    )}
                   </View>
 
 

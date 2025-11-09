@@ -1,6 +1,6 @@
 {
   "name": "expo-user-management",
-  "version": "1.0.7",
+  "version": "1.0.33",
   "main": "index.ts",
   "scripts": {
     "start": "expo start --tunnel",
@@ -44,11 +44,14 @@
     "clsx": "^2.1.1",
     "expo": "~54.0.18",
     "expo-constants": "~18.0.10",
+    "expo-file-system": "^19.0.17",
     "expo-font": "~14.0.9",
     "expo-image-picker": "~17.0.8",
     "expo-linking": "~8.0.8",
     "expo-location": "~19.0.7",
+    "expo-print": "^15.0.7",
     "expo-router": "^6.0.13",
+    "expo-sharing": "^14.0.7",
     "expo-status-bar": "~3.0.8",
     "expo-updates": "~29.0.12",
     "lucide-react-native": "^0.546.0",
@@ -65,7 +68,8 @@
     "react-native-vector-icons": "^10.3.0",
     "react-native-web": "^0.21.0",
     "tailwind-merge": "^3.3.1",
-    "tailwindcss-animate": "^1.0.7"
+    "tailwindcss-animate": "^1.0.7",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/moment-timezone": "^0.5.13",

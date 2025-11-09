@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
-import { View, Modal, Pressable } from 'react-native';
+import { cn } from '@/lib/utils';
 import { ChevronDown, Filter, RotateCcw } from 'lucide-react-native';
-import { Text } from './text';
+import moment from 'moment-timezone';
+import React, { useState } from 'react';
+import { Modal, Pressable, View } from 'react-native';
 import { Button } from './button';
 import { Card, CardContent, CardHeader } from './card';
 import { DateRangePicker } from './date-picker';
-import { cn } from '@/lib/utils';
-import moment from 'moment-timezone';
+import { Text } from './text';
 
 export type DateFilterType = 'today' | 'month' | 'custom';
 
@@ -74,7 +74,7 @@ export function DateFilter({
 
   const setQuickRange = (type: 'today' | 'thisWeek' | 'lastWeek' | 'thisMonth' | 'lastMonth') => {
     const now = moment().tz('America/Argentina/Buenos_Aires');
-    
+
     switch (type) {
       case 'today':
         const today = now.toDate();
@@ -82,20 +82,28 @@ export function DateFilter({
         setTempEndDate(today);
         break;
       case 'thisWeek':
-        setTempStartDate(now.startOf('week').toDate());
-        setTempEndDate(now.endOf('week').toDate());
+        const startWeek = now.clone().startOf('week').toDate();
+        const endWeek = now.clone().endOf('week').toDate();
+        setTempStartDate(startWeek);
+        setTempEndDate(endWeek);
         break;
       case 'lastWeek':
-        setTempStartDate(now.subtract(1, 'week').startOf('week').toDate());
-        setTempEndDate(now.subtract(1, 'week').endOf('week').toDate());
+        const startLastWeek = now.clone().subtract(1, 'week').startOf('week').toDate();
+        const endLastWeek = now.clone().subtract(1, 'week').endOf('week').toDate();
+        setTempStartDate(startLastWeek);
+        setTempEndDate(endLastWeek);
         break;
       case 'thisMonth':
-        setTempStartDate(now.startOf('month').toDate());
-        setTempEndDate(now.endOf('month').toDate());
+        const startMonth = now.clone().startOf('month').toDate();
+        const endMonth = now.clone().endOf('month').toDate();
+        setTempStartDate(startMonth);
+        setTempEndDate(endMonth);
         break;
       case 'lastMonth':
-        setTempStartDate(now.subtract(1, 'month').startOf('month').toDate());
-        setTempEndDate(now.subtract(1, 'month').endOf('month').toDate());
+        const startLastMonth = now.clone().subtract(1, 'month').startOf('month').toDate();
+        const endLastMonth = now.clone().subtract(1, 'month').endOf('month').toDate();
+        setTempStartDate(startLastMonth);
+        setTempEndDate(endLastMonth);
         break;
     }
   };
@@ -113,7 +121,7 @@ export function DateFilter({
           </Text>
           <ChevronDown className="text-muted-foreground" size={16} />
         </Pressable>
-        
+
         {/* Botón limpiar filtros */}
         {selectedFilter !== 'today' && onClearFilter && (
           <Pressable
@@ -142,7 +150,7 @@ export function DateFilter({
                 <Text variant="small" className="text-muted-foreground font-medium">
                   Filtros rápidos
                 </Text>
-                
+
                 <View className="flex-row gap-2">
                   <Button
                     variant={selectedFilter === 'today' ? 'default' : 'outline'}
@@ -150,14 +158,6 @@ export function DateFilter({
                     className="flex-1"
                   >
                     <Text>Hoy</Text>
-                  </Button>
-                  
-                  <Button
-                    variant={selectedFilter === 'month' ? 'default' : 'outline'}
-                    onPress={() => handlePresetSelect('month')}
-                    className="flex-1"
-                  >
-                    <Text>Este mes</Text>
                   </Button>
                 </View>
               </View>
@@ -167,7 +167,7 @@ export function DateFilter({
                 <Text variant="small" className="text-muted-foreground font-medium">
                   Rangos rápidos
                 </Text>
-                
+
                 <View className="flex-row gap-2">
                   <Button
                     variant="outline"
@@ -186,7 +186,7 @@ export function DateFilter({
                     <Text>Semana pasada</Text>
                   </Button>
                 </View>
-                
+
                 <View className="flex-row gap-2">
                   <Button
                     variant="outline"
@@ -212,7 +212,7 @@ export function DateFilter({
                 <Text variant="small" className="text-muted-foreground font-medium">
                   Rango personalizado
                 </Text>
-                
+
                 <DateRangePicker
                   startDate={tempStartDate}
                   endDate={tempEndDate}

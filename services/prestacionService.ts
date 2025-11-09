@@ -1,7 +1,7 @@
-import { supabase } from '../lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import moment from 'moment-timezone';
 import 'moment/locale/es'; // Importar locale en español
+import { supabase } from '../lib/supabase';
 import { connectivityService } from './connectivityService';
 
 // Tipos base de la base de datos
@@ -205,22 +205,25 @@ class PrestacionService {
       // Obtener rango de fechas del día (para testing usa 2024-10-22)
       // const { inicio: inicioDelDia, fin: finDelDia } = this.obtenerRangoFechaDelDia();
 
-// Definí la zona horaria de Argentina
-const TIMEZONE = 'America/Argentina/Buenos_Aires';
+      // Obtener rango de fechas del día en hora Argentina
+      const ahora = moment.tz(this.TIMEZONE);
+      const inicioDelDiaArgentina = ahora.clone().startOf('day');
+      const finDelDiaArgentina = ahora.clone().endOf('day');
 
-// Obtené la fecha actual en esa zona
-const ahora = moment.tz(TIMEZONE);
+      // Convertir a UTC para la consulta
+      const inicioDelDiaUTC = inicioDelDiaArgentina.clone().utc().toISOString();
+      const finDelDiaUTC = finDelDiaArgentina.clone().utc().toISOString();
 
-// Calculá el inicio y fin del día
-const inicioDelDia = ahora.clone().startOf('day');
-const finDelDia = ahora.clone().endOf('day');
+      console.log(`📅 Consultando prestaciones del día:
+        - Argentina: ${inicioDelDiaArgentina.format('YYYY-MM-DD HH:mm:ss')} a ${finDelDiaArgentina.format('YYYY-MM-DD HH:mm:ss')}
+        - UTC: ${inicioDelDiaUTC} a ${finDelDiaUTC}`);
 
-// Query usando RPC para obtener coordenadas extraídas
-const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_con_coordenadas', {
-  p_user_id: currentUserId,
-  p_fecha_inicio: inicioDelDia.toISOString(),
-  p_fecha_fin: finDelDia.toISOString()
-});
+      // Query usando RPC para obtener coordenadas extraídas
+      const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_con_coordenadas', {
+        p_user_id: currentUserId,
+        p_fecha_inicio: inicioDelDiaUTC,
+        p_fecha_fin: finDelDiaUTC
+      });
       if (error) {
         console.log(error);
         throw error;
@@ -304,7 +307,7 @@ const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_c
 
       return {
         exito: dentroDelRango,
-        mensaje: dentroDelRango 
+        mensaje: dentroDelRango
           ? 'Prestación completada offline - se sincronizará automáticamente'
           : `Estás muy lejos del lugar de la prestación. Distancia actual: ${Math.round(distancia)}m (máximo permitido: ${radioPermitido}m)`,
         distancia_metros: distancia,
@@ -336,7 +339,7 @@ const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_c
 
         // Validar ubicación usando datos en cache
         const validacionOffline = await this.validarUbicacionOffline(prestacionId, ubicacionLat, ubicacionLng);
-        
+
         // Si pasa la validación offline, guardar para sincronizar después
         if (validacionOffline.exito) {
           await this.guardarPrestacionOffline({
@@ -431,7 +434,7 @@ const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_c
 
       // Verificar cuáles ya están completadas en el servidor
       const prestacionesIds = prestacionesOffline.map(p => p.prestacion_id);
-      
+
       const { data: prestacionesCompletadas, error } = await supabase
         .from('prestaciones')
         .select('id')
@@ -444,7 +447,7 @@ const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_c
       }
 
       const idsCompletadas = prestacionesCompletadas?.map(p => p.id) || [];
-      
+
       if (idsCompletadas.length > 0) {
         // Filtrar las que NO están completadas (mantener solo las pendientes)
         const prestacionesPendientes = prestacionesOffline.filter(
@@ -520,7 +523,7 @@ const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_c
             prestacion.ubicacion_lng,
             prestacion.notas
           );
-          
+
           // Solo contar como sincronizada si fue exitosa
           if (resultado.exito) {
             sincronizadas++;
@@ -658,8 +661,8 @@ const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_c
   }
   // Obtener prestaciones por rango de fechas personalizado
   async obtenerPrestacionesPorRango(
-    fechaInicio: Date, 
-    fechaFin: Date, 
+    fechaInicio: Date,
+    fechaFin: Date,
     userId?: string
   ): Promise<{
     pendientes: PrestacionCompleta[];
@@ -675,7 +678,7 @@ const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_c
         const hoy = moment.tz(this.TIMEZONE).startOf('day');
         const inicioRango = moment(fechaInicio).startOf('day');
         const finRango = moment(fechaFin).endOf('day');
-        
+
         // Si el rango incluye hoy, devolver cache del día actual
         if (hoy.isBetween(inicioRango, finRango, null, '[]')) {
           console.log('📡 Sin conexión - usando cache del día actual para rango que incluye hoy');
@@ -684,7 +687,7 @@ const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_c
             return { ...cachedData, isFromCache: true, isOffline: true };
           }
         }
-        
+
         throw new Error('Sin conexión y el rango solicitado no está disponible offline');
       }
 
@@ -696,15 +699,22 @@ const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_c
         throw new Error('Usuario no autenticado');
       }
 
-      // Convertir fechas a formato ISO con timezone
-      const inicioISO = moment(fechaInicio).tz(this.TIMEZONE).startOf('day').toISOString();
-      const finISO = moment(fechaFin).tz(this.TIMEZONE).endOf('day').toISOString();
+      // Convertir fechas de Argentina a UTC para la consulta
+      const inicioArgentina = moment(fechaInicio).tz(this.TIMEZONE).startOf('day');
+      const finArgentina = moment(fechaFin).tz(this.TIMEZONE).endOf('day');
+
+      const inicioUTC = inicioArgentina.clone().utc().toISOString();
+      const finUTC = finArgentina.clone().utc().toISOString();
+
+      console.log(`📅 Consultando prestaciones por rango:
+        - Argentina: ${inicioArgentina.format('YYYY-MM-DD HH:mm:ss')} a ${finArgentina.format('YYYY-MM-DD HH:mm:ss')}
+        - UTC: ${inicioUTC} a ${finUTC}`);
 
       // Query usando RPC para obtener coordenadas extraídas
       const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_con_coordenadas', {
         p_user_id: currentUserId,
-        p_fecha_inicio: inicioISO,
-        p_fecha_fin: finISO
+        p_fecha_inicio: inicioUTC,
+        p_fecha_fin: finUTC
       });
 
       if (error) {
@@ -738,17 +748,17 @@ const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_c
       const hoy = moment.tz(this.TIMEZONE).startOf('day');
       const inicioRango = moment(fechaInicio).startOf('day');
       const finRango = moment(fechaFin).endOf('day');
-      
+
       if (hoy.isBetween(inicioRango, finRango, null, '[]')) {
         // Filtrar solo las prestaciones del día actual para el cache
         const prestacionesHoy = prestacionesCompletas.filter(p => {
           const fechaPrestacion = moment(p.fecha).tz(this.TIMEZONE).startOf('day');
           return fechaPrestacion.isSame(hoy, 'day');
         });
-        
+
         const pendientesHoy = prestacionesHoy.filter(p => p.estado === 'pendiente');
         const completadasHoy = prestacionesHoy.filter(p => p.estado === 'completada');
-        
+
         await this.guardarEnCache({ pendientes: pendientesHoy, completadas: completadasHoy });
         console.log('💾 Cache del día actual actualizado durante consulta de rango');
       }
@@ -769,7 +779,7 @@ const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_c
   }> {
     const inicioMes = moment.tz(this.TIMEZONE).startOf('month').toDate();
     const finMes = moment.tz(this.TIMEZONE).endOf('month').toDate();
-    
+
     return this.obtenerPrestacionesPorRango(inicioMes, finMes, userId);
   }
 }

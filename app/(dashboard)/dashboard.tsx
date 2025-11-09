@@ -1,16 +1,16 @@
-import React, { useState, useEffect } from 'react';
-import { View, ScrollView, RefreshControl, Platform, Image } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
-import { supabase } from '../../lib/supabase';
 import { Session } from '@supabase/supabase-js';
-import { Text } from '../../components/ui/text';
-import { Card, CardContent } from '../../components/ui/card';
+import { router } from 'expo-router';
+import { Building2, CheckCircle, Clock, FileText, Settings } from 'lucide-react-native';
+import React, { useEffect, useState } from 'react';
+import { Image, Platform, RefreshControl, ScrollView, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button } from '../../components/ui/button';
+import { Card, CardContent } from '../../components/ui/card';
 import { Skeleton } from '../../components/ui/skeleton';
-import { FileText, Settings, CheckCircle, Clock, Building2 } from 'lucide-react-native';
-import { prestacionService, PrestacionCompleta } from '../../services/prestacionService';
+import { Text } from '../../components/ui/text';
+import { supabase } from '../../lib/supabase';
 import { useConnectivity } from '../../services/connectivityService';
+import { PrestacionCompleta, prestacionService } from '../../services/prestacionService';
 
 export default function DashboardPage() {
     const insets = useSafeAreaInsets();
