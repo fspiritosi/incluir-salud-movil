@@ -1,19 +1,23 @@
-import React, { useState } from 'react';
-import { View, Linking, ScrollView } from 'react-native';
-import { Text } from './ui/text';
-import { Button } from './ui/button';
-import { Badge } from './ui/badge';
-import { Textarea } from './ui/textarea';
-import { Label } from './ui/label';
 import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from './ui/dialog';
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  Loader2,
+  MapPin,
+  MessageSquare,
+  Navigation,
+  Phone,
+  User
+} from 'lucide-react-native';
+import React, { useState } from 'react';
+import { Linking, ScrollView, View } from 'react-native';
+import { useDevMode } from '../contexts/DevModeContext';
+import { useLocation } from '../hooks/useLocation';
+import {
+  PrestacionCompleta,
+  prestacionService,
+  ValidacionUbicacionResult
+} from '../services/prestacionService';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,24 +28,20 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from './ui/alert-dialog';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
 import {
-  MapPin,
-  Clock,
-  Phone,
-  User,
-  CheckCircle2,
-  AlertTriangle,
-  Loader2,
-  MessageSquare,
-  Navigation
-} from 'lucide-react-native';
-import {
-  PrestacionCompleta,
-  prestacionService,
-  ValidacionUbicacionResult
-} from '../services/prestacionService';
-import { useLocation } from '../hooks/useLocation';
-import { useDevMode } from '../contexts/DevModeContext';
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import { Label } from './ui/label';
+import { Text } from './ui/text';
+import { Textarea } from './ui/textarea';
 
 interface Props {
   visible: boolean;
@@ -63,6 +63,9 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
   const [validationErrorModalOpen, setValidationErrorModalOpen] = useState(false);
   const [validationErrorMessage, setValidationErrorMessage] = useState('');
   const [contactModalOpen, setContactModalOpen] = useState(false);
+  const [limiteDiarioModalOpen, setLimiteDiarioModalOpen] = useState(false);
+  const [limiteDiarioMessage, setLimiteDiarioMessage] = useState('');
+  const [tiempoRestante, setTiempoRestante] = useState('');
 
   // Estado para ubicación actual (para direcciones)
   const [currentLocation, setCurrentLocation] = useState<{ latitude: number; longitude: number } | null>(null);
@@ -99,16 +102,35 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
         ubicacion.latitude,
         ubicacion.longitude,
         notas,
-
+        prestacion.paciente_id
       );
 
       if (resultado.exito) {
         setSuccessModalOpen(true);
       } else {
-        // Mejorar el mensaje de error con información de distancia
-        const mensajeMejorado = `${resultado.mensaje}\n\nDistancia actual: ${Math.round(resultado.distancia_metros)}m (máximo permitido: 50m)`;
-        setValidationErrorMessage(mensajeMejorado);
-        setValidationErrorModalOpen(true);
+        // Verificar si es error de límite diario
+        if (resultado.mensaje.includes('Ya completaste una')) {
+          // Calcular tiempo restante hasta mañana
+          const ahora = prestacionService.obtenerFechaActualArgentina();
+          const manana = ahora.clone().add(1, 'day').startOf('day');
+          const horasRestantes = manana.diff(ahora, 'hours');
+          const minutosRestantes = manana.diff(ahora, 'minutes') % 60;
+
+          const tiempoMsg = horasRestantes > 0
+            ? `${horasRestantes}h ${minutosRestantes}m`
+            : `${minutosRestantes}m`;
+
+          setTiempoRestante(tiempoMsg);
+          setLimiteDiarioMessage(resultado.mensaje);
+          setLimiteDiarioModalOpen(true);
+        } else {
+          // Mejorar el mensaje de error con información de distancia
+          const mensajeMejorado = resultado.distancia_metros > 0
+            ? `${resultado.mensaje}\n\nDistancia actual: ${Math.round(resultado.distancia_metros)}m (máximo permitido: 50m)`
+            : resultado.mensaje;
+          setValidationErrorMessage(mensajeMejorado);
+          setValidationErrorModalOpen(true);
+        }
       }
     } catch (error) {
       console.error('Error completando prestación:', error);
@@ -242,12 +264,21 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
                   />
                 </View>
 
-                {/* Estado del Sistema */}
-                <View className="flex-row items-center gap-2 p-3 bg-green-50 rounded-lg border border-green-200">
-                  <CheckCircle2 size={16} color="#10b981" />
-                  <Text className="text-sm text-green-700">
-                    Sistema listo para validar ubicación
-                  </Text>
+                {/* Información importante */}
+                <View className="gap-2">
+                  <View className="flex-row items-center gap-2 p-3 bg-amber-50 rounded-lg border border-amber-200">
+                    <AlertTriangle size={16} color="#f59e0b" />
+                    <Text className="text-xs text-amber-700 flex-1">
+                      Solo puedes completar 1 prestación por día
+                    </Text>
+                  </View>
+
+                  <View className="flex-row items-center gap-2 p-3 bg-green-50 rounded-lg border border-green-200">
+                    <CheckCircle2 size={16} color="#10b981" />
+                    <Text className="text-xs text-green-700 flex-1">
+                      Sistema listo para validar ubicación
+                    </Text>
+                  </View>
                 </View>
               </View>
             </ScrollView>
@@ -367,6 +398,37 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
             <AlertDialogCancel>
               <Text>Cancelar</Text>
             </AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Modal de Límite Diario */}
+      <AlertDialog open={limiteDiarioModalOpen} onOpenChange={setLimiteDiarioModalOpen}>
+        <AlertDialogContent className="max-w-sm mx-6">
+          <AlertDialogHeader>
+            <View style={styles.modalIconContainer}>
+              <AlertTriangle size={48} color="#f59e0b" />
+              <AlertDialogTitle style={styles.modalTitle}>Límite Diario Alcanzado</AlertDialogTitle>
+            </View>
+            <AlertDialogDescription style={styles.modalDescription}>
+              {limiteDiarioMessage || 'Ya completaste una prestación hoy. Solo puedes completar 1 prestación por día.'}
+              {'\n\n'}
+              <Text className="font-semibold text-amber-700">
+                Podrás completar otra en: {tiempoRestante}
+              </Text>
+              {'\n'}
+              <Text className="text-muted-foreground text-xs">
+                (A partir de las 00:00 hs)
+              </Text>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onPress={() => {
+              setLimiteDiarioModalOpen(false);
+              onClose();
+            }}>
+              <Text className="text-white font-medium">Entendido</Text>
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

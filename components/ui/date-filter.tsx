@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader } from './card';
 import { DateRangePicker } from './date-picker';
 import { Text } from './text';
 
-export type DateFilterType = 'today' | 'month' | 'custom';
+export type DateFilterType = 'today' | 'week' | 'month' | 'custom';
 
 export interface DateRange {
   start: Date;
@@ -38,6 +38,8 @@ export function DateFilter({
     switch (selectedFilter) {
       case 'today':
         return 'Hoy';
+      case 'week':
+        return 'Última semana';
       case 'month':
         return 'Este mes';
       case 'custom':
@@ -48,13 +50,15 @@ export function DateFilter({
         }
         return 'Rango personalizado';
       default:
-        return 'Hoy';
+        return 'Última semana';
     }
   };
 
   const handlePresetSelect = (filter: DateFilterType) => {
     if (filter === 'today') {
       onFilterChange('today');
+    } else if (filter === 'week') {
+      onFilterChange('week');
     } else if (filter === 'month') {
       onFilterChange('month');
     }
@@ -123,7 +127,7 @@ export function DateFilter({
         </Pressable>
 
         {/* Botón limpiar filtros */}
-        {selectedFilter !== 'today' && onClearFilter && (
+        {selectedFilter !== 'week' && onClearFilter && (
           <Pressable
             onPress={onClearFilter}
             className="px-3 py-2 bg-muted border border-border rounded-md justify-center items-center"
@@ -158,6 +162,13 @@ export function DateFilter({
                     className="flex-1"
                   >
                     <Text>Hoy</Text>
+                  </Button>
+                  <Button
+                    variant={selectedFilter === 'week' ? 'default' : 'outline'}
+                    onPress={() => handlePresetSelect('week')}
+                    className="flex-1"
+                  >
+                    <Text>Última semana</Text>
                   </Button>
                 </View>
               </View>

@@ -1,6 +1,6 @@
 {
   "name": "expo-user-management",
-  "version": "1.0.33",
+  "version": "1.0.35",
   "main": "index.ts",
   "scripts": {
     "start": "expo start --tunnel",
@@ -8,6 +8,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
+    "gentypes": "npx supabase gen types typescript --project-id gdzhrpwsqmlgmuqeusrn --schema public > database.types.ts",
     "deploy": "eas build --profile preview --platform android",
     "update": "npm version patch --no-git-tag-version && eas update --branch preview"
   },
@@ -67,6 +68,7 @@
     "react-native-url-polyfill": "^3.0.0",
     "react-native-vector-icons": "^10.3.0",
     "react-native-web": "^0.21.0",
+    "supabase": "^2.58.5",
     "tailwind-merge": "^3.3.1",
     "tailwindcss-animate": "^1.0.7",
     "xlsx": "^0.18.5"

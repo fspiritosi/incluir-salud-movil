@@ -58,8 +58,8 @@ export default function PrestacionesPage() {
 
   const [isOffline, setIsOffline] = useState(false);
 
-  // Estados para filtros de fecha
-  const [dateFilter, setDateFilter] = useState<DateFilterType>('today');
+  // Estados para filtros de fecha - Por defecto última semana
+  const [dateFilter, setDateFilter] = useState<DateFilterType>('week');
   const [customDateRange, setCustomDateRange] = useState<DateRange | undefined>();
 
 
@@ -112,6 +112,9 @@ export default function PrestacionesPage() {
         case 'today':
           resultado = await prestacionService.obtenerPrestacionesDelDia(undefined, forceRefresh);
           break;
+        case 'week':
+          resultado = await prestacionService.obtenerPrestacionesUltimaSemana(undefined, forceRefresh);
+          break;
         case 'month':
           resultado = await prestacionService.obtenerPrestacionesDelMes();
           break;
@@ -122,12 +125,12 @@ export default function PrestacionesPage() {
               customDateRange.end
             );
           } else {
-            // Fallback a día actual si no hay rango personalizado
-            resultado = await prestacionService.obtenerPrestacionesDelDia(undefined, forceRefresh);
+            // Fallback a última semana si no hay rango personalizado
+            resultado = await prestacionService.obtenerPrestacionesUltimaSemana(undefined, forceRefresh);
           }
           break;
         default:
-          resultado = await prestacionService.obtenerPrestacionesDelDia(undefined, forceRefresh);
+          resultado = await prestacionService.obtenerPrestacionesUltimaSemana(undefined, forceRefresh);
       }
 
       setPrestacionesPendientes(resultado.pendientes);
@@ -196,6 +199,7 @@ export default function PrestacionesPage() {
   };
 
   const handlePrestacionPress = (prestacion: PrestacionCompleta) => {
+    console.log(prestacion.prestacion_id)
     if (prestacion.estado === 'pendiente') {
       setPrestacionSeleccionada(prestacion);
       setModalVisible(true);
@@ -277,18 +281,12 @@ export default function PrestacionesPage() {
     return prestacionService.esFechaVencida(fecha);
   };
 
-  const isPrestacionDeHoy = (fecha: string) => {
-    const fechaPrestacion = prestacionService.obtenerFechaActualArgentina().set({
-      year: new Date(fecha).getFullYear(),
-      month: new Date(fecha).getMonth(),
-      date: new Date(fecha).getDate(),
-      hour: 0,
-      minute: 0,
-      second: 0,
-      millisecond: 0
-    });
-    const hoy = prestacionService.obtenerFechaActualArgentina().startOf('day');
-    return fechaPrestacion.isSame(hoy, 'day');
+  const isPrestacionDentroDeUltimaSemana = (fecha: string) => {
+    const fechaPrestacion = moment.tz(fecha, 'America/Argentina/Buenos_Aires');
+    const ahora = prestacionService.obtenerFechaActualArgentina();
+    const hace7Dias = ahora.clone().subtract(7, 'days').startOf('day');
+
+    return fechaPrestacion.isSameOrAfter(hace7Dias) && fechaPrestacion.isSameOrBefore(ahora);
   };
 
 
@@ -314,25 +312,28 @@ export default function PrestacionesPage() {
             <View className="flex-1">
               <Text variant="h2">
                 {dateFilter === 'today' ? 'Prestaciones de Hoy' :
-                  dateFilter === 'month' ? 'Prestaciones del Mes' :
-                    'Prestaciones Personalizadas'}
+                  dateFilter === 'week' ? 'Última Semana' :
+                    dateFilter === 'month' ? 'Prestaciones del Mes' :
+                      'Prestaciones Personalizadas'}
               </Text>
               <Text variant="muted">
                 {dateFilter === 'today'
                   ? prestacionService.obtenerFechaActualArgentina().format('dddd, D [de] MMMM [de] YYYY')
-                  : dateFilter === 'month'
-                    ? prestacionService.obtenerFechaActualArgentina().format('MMMM [de] YYYY')
-                    : customDateRange
-                      ? `${prestacionService.obtenerFechaActualArgentina().set({
-                        year: customDateRange.start.getFullYear(),
-                        month: customDateRange.start.getMonth(),
-                        date: customDateRange.start.getDate()
-                      }).format('DD/MM/YYYY')} - ${prestacionService.obtenerFechaActualArgentina().set({
-                        year: customDateRange.end.getFullYear(),
-                        month: customDateRange.end.getMonth(),
-                        date: customDateRange.end.getDate()
-                      }).format('DD/MM/YYYY')}`
-                      : 'Selecciona un rango de fechas'
+                  : dateFilter === 'week'
+                    ? `Últimos 7 días`
+                    : dateFilter === 'month'
+                      ? prestacionService.obtenerFechaActualArgentina().format('MMMM [de] YYYY')
+                      : customDateRange
+                        ? `${prestacionService.obtenerFechaActualArgentina().set({
+                          year: customDateRange.start.getFullYear(),
+                          month: customDateRange.start.getMonth(),
+                          date: customDateRange.start.getDate()
+                        }).format('DD/MM/YYYY')} - ${prestacionService.obtenerFechaActualArgentina().set({
+                          year: customDateRange.end.getFullYear(),
+                          month: customDateRange.end.getMonth(),
+                          date: customDateRange.end.getDate()
+                        }).format('DD/MM/YYYY')}`
+                        : 'Selecciona un rango de fechas'
                 }
               </Text>
               {/* Indicador de estado */}
@@ -496,8 +497,8 @@ export default function PrestacionesPage() {
                       </View>
                     </Button>
 
-                    {/* Solo mostrar botón Completar si la prestación es de HOY */}
-                    {isPrestacionDeHoy(prestacion.fecha) && (
+                    {/* Solo mostrar botón Completar si la prestación es de la última semana */}
+                    {isPrestacionDentroDeUltimaSemana(prestacion.fecha) && (
                       <Button
                         size="sm"
                         className="flex-2"

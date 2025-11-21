@@ -62,13 +62,7 @@ export interface PrestacionCompleta {
   estado: 'pendiente' | 'completada' | 'cancelada' | 'en_proceso';
   tipo_prestacion: string;
   notas?: string;
-}
-
-export interface ValidacionUbicacion {
-  exito: boolean;
-  mensaje: string;
-  distancia_metros: number;
-  prestacion_actualizada?: any;
+  paciente_id: string;
 }
 
 export interface PrestacionOffline {
@@ -78,6 +72,13 @@ export interface PrestacionOffline {
   notas: string;
   timestamp: string;
   distancia_metros: number;
+}
+
+export interface ValidacionUbicacion {
+  exito: boolean;
+  mensaje: string;
+  distancia_metros: number;
+  prestacion_actualizada?: any;
 }
 
 class PrestacionService {
@@ -165,7 +166,92 @@ class PrestacionService {
     }
   }
 
+  // Verificar si el usuario ya completó una prestación hoy para este paciente
+  async verificarLimiteCompletadasHoy(userId?: string, pacienteId?: string): Promise<{
+    yaCompletoHoy: boolean;
+    cantidadCompletadasHoy: number;
+    detallePrestacion?: {
+      tipo: string;
+      hora: string;
+      paciente: string;
+    };
+  }> {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const currentUserId = userId || user?.id;
 
+      if (!currentUserId) {
+        throw new Error('Usuario no autenticado');
+      }
+
+      // Obtener inicio y fin del día actual en Argentina
+      const ahora = moment.tz(this.TIMEZONE);
+      const inicioDelDiaArgentina = ahora.clone().startOf('day');
+      const finDelDiaArgentina = ahora.clone().endOf('day');
+
+      // Convertir a UTC para la consulta
+      const inicioDelDiaUTC = inicioDelDiaArgentina.clone().utc().toISOString();
+      const finDelDiaUTC = finDelDiaArgentina.clone().utc().toISOString();
+
+      let query = supabase
+        .from('prestaciones')
+        .select('id, tipo_prestacion, completed_at, paciente_id, pacientes(nombre, apellido)', { count: 'exact' })
+        .eq('user_id', currentUserId)
+        .eq('estado', 'completada')
+        .gte('completed_at', inicioDelDiaUTC)
+        .lte('completed_at', finDelDiaUTC);
+
+      // Si se proporciona pacienteId, filtrar por ese paciente
+      if (pacienteId) {
+        query = query.eq('paciente_id', pacienteId);
+      }
+
+      const { data, error, count } = await query;
+
+      if (error) {
+        console.error('Error verificando límite:', error);
+        throw error;
+      }
+
+      const cantidadCompletadas = count || 0;
+      let detallePrestacion;
+
+      if (cantidadCompletadas > 0 && data && data.length > 0) {
+        const prestacion = data[0];
+        // @ts-ignore
+        const pacienteNombre = prestacion.pacientes ? `${prestacion.pacientes.nombre} ${prestacion.pacientes.apellido}` : 'Paciente';
+
+        detallePrestacion = {
+          tipo: prestacion.tipo_prestacion,
+          hora: this.formatearFecha(prestacion.completed_at, 'HH:mm'),
+          paciente: pacienteNombre
+        };
+      }
+
+      return {
+        yaCompletoHoy: cantidadCompletadas >= 1,
+        cantidadCompletadasHoy: cantidadCompletadas,
+        detallePrestacion
+      };
+    } catch (error) {
+      console.error('Error verificando límite de completadas:', error);
+      throw error;
+    }
+  }
+
+  // Obtener prestaciones de la última semana (por defecto)
+  async obtenerPrestacionesUltimaSemana(userId?: string, forceRefresh: boolean = false): Promise<{
+    pendientes: PrestacionCompleta[];
+    completadas: PrestacionCompleta[];
+    isFromCache: boolean;
+    isOffline: boolean;
+  }> {
+    const ahora = moment.tz(this.TIMEZONE);
+    const hace7Dias = ahora.clone().subtract(7, 'days').startOf('day').toDate();
+    const finHoy = ahora.clone().endOf('day').toDate();
+
+    return this.obtenerPrestacionesPorRango(hace7Dias, finHoy, userId);
+  }
 
   // Obtener prestaciones del día actual con sistema de cache inteligente
   async obtenerPrestacionesDelDia(userId?: string, forceRefresh: boolean = false): Promise<{
@@ -201,9 +287,6 @@ class PrestacionService {
       if (!currentUserId) {
         throw new Error('Usuario no autenticado');
       }
-
-      // Obtener rango de fechas del día (para testing usa 2024-10-22)
-      // const { inicio: inicioDelDia, fin: finDelDia } = this.obtenerRangoFechaDelDia();
 
       // Obtener rango de fechas del día en hora Argentina
       const ahora = moment.tz(this.TIMEZONE);
@@ -245,7 +328,8 @@ class PrestacionService {
           obra_social: p.obra_social_nombre || 'Sin obra social',
           estado: p.estado,
           tipo_prestacion: p.tipo_prestacion,
-          notas: p.notas || undefined
+          notas: p.notas || undefined,
+          paciente_id: p.paciente_id
         };
       });
 
@@ -328,10 +412,41 @@ class PrestacionService {
     prestacionId: string,
     ubicacionLat: number,
     ubicacionLng: number,
-    notas?: string
+    notas?: string,
+    pacienteId?: string
   ): Promise<ValidacionUbicacion> {
     try {
       const isOnline = await connectivityService.isOnline();
+
+      // VALIDACIÓN: Verificar límite de 1 prestación por día POR PACIENTE
+      if (isOnline) {
+        let pacienteIdParaValidar = pacienteId || '';
+
+        // Intentar obtener de cache si no se pasó (aunque idealmente actualizaremos la llamada)
+        if (!pacienteIdParaValidar) {
+          const cachedData = await this.obtenerDeCache();
+          const prestacion = cachedData?.pendientes.find(p => p.prestacion_id === prestacionId);
+          if (prestacion) {
+            pacienteIdParaValidar = prestacion.paciente_id;
+          }
+        }
+
+        if (pacienteIdParaValidar) {
+          const limiteCheck = await this.verificarLimiteCompletadasHoy(undefined, pacienteIdParaValidar);
+          if (limiteCheck.yaCompletoHoy) {
+            const detalle = limiteCheck.detallePrestacion;
+            const mensaje = detalle
+              ? `Ya completaste una ${detalle.tipo} para ${detalle.paciente} hoy a las ${detalle.hora}. Podrás completar otra mañana.`
+              : 'Ya completaste una prestación para este paciente hoy. Solo puedes completar 1 prestación por paciente por día.';
+
+            return {
+              exito: false,
+              mensaje: mensaje,
+              distancia_metros: 0
+            };
+          }
+        }
+      }
 
       // Si no hay conexión, validar offline
       if (!isOnline) {
@@ -659,6 +774,7 @@ class PrestacionService {
 
     return R * c; // Distancia en metros
   }
+
   // Obtener prestaciones por rango de fechas personalizado
   async obtenerPrestacionesPorRango(
     fechaInicio: Date,
@@ -737,7 +853,8 @@ class PrestacionService {
           obra_social: p.obra_social_nombre || 'Sin obra social',
           estado: p.estado,
           tipo_prestacion: p.tipo_prestacion,
-          notas: p.notas || undefined
+          notas: p.notas || undefined,
+          paciente_id: p.paciente_id
         };
       });
 
