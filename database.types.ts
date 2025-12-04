@@ -190,6 +190,57 @@ export type Database = {
           },
         ]
       }
+      prestaciones_reasignacion_pool: {
+        Row: {
+          cancelled_at: string
+          cancelled_by: string | null
+          id: string
+          metadata: Json | null
+          prestacion_id: string
+          prestador_id: string
+          processed_at: string | null
+          processed_by: string | null
+          reason: string
+        }
+        Insert: {
+          cancelled_at?: string
+          cancelled_by?: string | null
+          id?: string
+          metadata?: Json | null
+          prestacion_id: string
+          prestador_id: string
+          processed_at?: string | null
+          processed_by?: string | null
+          reason?: string
+        }
+        Update: {
+          cancelled_at?: string
+          cancelled_by?: string | null
+          id?: string
+          metadata?: Json | null
+          prestacion_id?: string
+          prestador_id?: string
+          processed_at?: string | null
+          processed_by?: string | null
+          reason?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "prestaciones_reasignacion_pool_prestacion_id_fkey"
+            columns: ["prestacion_id"]
+            isOneToOne: false
+            referencedRelation: "prestaciones"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "prestaciones_reasignacion_pool_prestador_id_fkey"
+            columns: ["prestador_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           activo: boolean | null
@@ -203,6 +254,7 @@ export type Database = {
           nombre: string | null
           registration_source: string | null
           telefono: string | null
+          tipo_prestador: string | null
           tipo_usuario: string | null
           updated_at: string | null
         }
@@ -218,6 +270,7 @@ export type Database = {
           nombre?: string | null
           registration_source?: string | null
           telefono?: string | null
+          tipo_prestador?: string | null
           tipo_usuario?: string | null
           updated_at?: string | null
         }
@@ -233,6 +286,7 @@ export type Database = {
           nombre?: string | null
           registration_source?: string | null
           telefono?: string | null
+          tipo_prestador?: string | null
           tipo_usuario?: string | null
           updated_at?: string | null
         }
@@ -537,6 +591,12 @@ export type Database = {
           prestacion_actualizada: Json
         }[]
       }
+      disable_prestador_and_cancel: {
+        Args: { p_actor_id: string; p_prestador_id: string; p_reason?: string }
+        Returns: {
+          cancelled_count: number
+        }[]
+      }
       disablelongtransactions: { Args: never; Returns: string }
       dropgeometrycolumn:
         | {
@@ -747,6 +807,10 @@ export type Database = {
       postgis_version: { Args: never; Returns: string }
       postgis_wagyu_version: { Args: never; Returns: string }
       programar_prestaciones_cronicas: { Args: never; Returns: undefined }
+      set_prestador_activo: {
+        Args: { p_activo: boolean; p_prestador_id: string }
+        Returns: undefined
+      }
       st_3dclosestpoint: {
         Args: { geom1: unknown; geom2: unknown }
         Returns: unknown

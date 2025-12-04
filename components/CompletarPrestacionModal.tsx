@@ -134,8 +134,36 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
       }
     } catch (error) {
       console.error('Error completando prestación:', error);
-      setErrorMessage('Error de conexión. La prestación se guardó offline y se sincronizará automáticamente.');
-      setErrorModalOpen(true);
+      
+      // Verificar si el error es por falta de conexión
+      const isOffline = error instanceof Error && (
+        error.message.includes('Sin conexión') || 
+        error.message.includes('offline') ||
+        error.message.includes('network')
+      );
+
+      if (isOffline) {
+        // Si es offline, la prestación debería haberse guardado localmente
+        // Verificar si se guardó correctamente
+        try {
+          const prestacionesOffline = await prestacionService.obtenerPrestacionesOffline();
+          const seGuardo = prestacionesOffline.some(p => p.prestacion_id === prestacion.prestacion_id);
+          
+          if (seGuardo) {
+            setSuccessMessage('Prestación guardada offline. Se sincronizará automáticamente cuando tengas conexión.');
+            setSuccessModalOpen(true);
+          } else {
+            setErrorMessage('Error guardando la prestación offline. Intenta nuevamente cuando tengas conexión.');
+            setErrorModalOpen(true);
+          }
+        } catch (checkError) {
+          setErrorMessage('Error de conexión. La prestación se guardó offline y se sincronizará automáticamente.');
+          setErrorModalOpen(true);
+        }
+      } else {
+        setErrorMessage('Error completando prestación. Intenta nuevamente.');
+        setErrorModalOpen(true);
+      }
     } finally {
       setLoading(false);
     }

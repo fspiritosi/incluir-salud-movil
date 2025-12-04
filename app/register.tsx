@@ -7,6 +7,13 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Text } from '../components/ui/text';
 import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '../components/ui/select';
+import {
     AlertDialog,
     AlertDialogAction,
     AlertDialogContent,
@@ -67,10 +74,25 @@ export default function RegisterPage() {
             password: password,
             options: {
                 data: {
-                    role: 'client'
+                    role: 'client',
+                    tipo_prestador: 'acompanante_terapeutico'
                 }
             }
         });
+
+        // Si el registro fue exitoso, actualizar el perfil con tipo_prestador
+        if (session && session.user) {
+            const { error: profileError,data } = await supabase
+                .from('profiles')
+                .update({
+                    tipo_prestador: 'acompanante_terapeutico'
+                })
+                .eq('id', session.user.id).select();
+
+            if (profileError) {
+                console.error('Error actualizando perfil:', profileError);
+            }
+        }
 
         if (error) {
             setErrorMessage(error.message);
@@ -139,6 +161,21 @@ export default function RegisterPage() {
                                 placeholder="Repite tu contraseña"
                                 autoCapitalize="none"
                             />
+                        </View>
+
+                        <View className="mb-4">
+                            <Text variant="small" className="mb-2">Tipo de Prestador</Text>
+                            <Select
+                                value={{ value: 'acompanante_terapeutico', label: 'Acompañante Terapéutico' }}
+                                disabled={true}
+                            >
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Acompañante Terapéutico" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem label="Acompañante Terapéutico" value="acompanante_terapeutico" />
+                                </SelectContent>
+                            </Select>
                         </View>
 
                         <Button

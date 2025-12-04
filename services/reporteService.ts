@@ -36,14 +36,76 @@ export interface ReporteData {
     };
 }
 
+export interface PacienteReporte {
+    id: string;
+    nombre: string;
+    apellido: string;
+    documento: string;
+}
+
 class ReporteService {
+    /**
+     * Obtiene la lista de pacientes del usuario autenticado
+     */
+    async obtenerPacientes(): Promise<PacienteReporte[]> {
+        try {
+            const { data: { user }, error: userError } = await supabase.auth.getUser();
+
+            if (userError || !user) {
+                throw new Error('Usuario no autenticado');
+            }
+
+            // Obtener pacientes únicos de las prestaciones del usuario
+            const { data: prestaciones, error: prestacionesError } = await supabase
+                .from('prestaciones')
+                .select(`
+                    paciente_id,
+                    pacientes (
+                        id,
+                        nombre,
+                        apellido,
+                        documento
+                    )
+                `)
+                .eq('user_id', user.id)
+                .not('paciente_id', 'is', null);
+
+            if (prestacionesError) {
+                throw prestacionesError;
+            }
+
+            // Extraer pacientes únicos
+            const pacientesMap = new Map<string, PacienteReporte>();
+            (prestaciones || []).forEach((p: any) => {
+                if (p.pacientes && !pacientesMap.has(p.pacientes.id)) {
+                    pacientesMap.set(p.pacientes.id, {
+                        id: p.pacientes.id,
+                        nombre: p.pacientes.nombre,
+                        apellido: p.pacientes.apellido,
+                        documento: p.pacientes.documento
+                    });
+                }
+            });
+
+            // Ordenar por apellido y nombre
+            return Array.from(pacientesMap.values()).sort((a, b) => {
+                const apellidoCompare = a.apellido.localeCompare(b.apellido);
+                if (apellidoCompare !== 0) return apellidoCompare;
+                return a.nombre.localeCompare(b.nombre);
+            });
+        } catch (error) {
+            console.error('Error obteniendo pacientes:', error);
+            throw error;
+        }
+    }
     /**
      * Obtiene el reporte de prestaciones del usuario autenticado
      */
     async obtenerReportePropio(
         fechaInicio: Date,
         fechaFin: Date,
-        estado?: 'todos' | 'pendiente' | 'completada' | 'cancelada' | 'en_proceso'
+        estado?: 'todos' | 'pendiente' | 'completada' | 'cancelada' | 'en_proceso',
+        pacienteId?: string
     ): Promise<ReporteData> {
         try {
             // 1. Obtener usuario autenticado
@@ -101,6 +163,11 @@ class ReporteService {
                 query = query.eq('estado', estado);
             }
 
+            // Aplicar filtro de paciente si se especifica
+            if (pacienteId) {
+                query = query.eq('paciente_id', pacienteId);
+            }
+
             const { data: prestaciones, error: prestacionesError } = await query;
 
             if (prestacionesError) {
@@ -122,10 +189,11 @@ class ReporteService {
                 } : null
             }));
 
-            // 6. Calcular totales
+            // 6. Calcular totales (excluyendo canceladas del monto)
+            const prestacionesNoCanceladas = prestacionesReporte.filter(p => p.estado !== 'cancelada');
             const totales = {
                 cantidad: prestacionesReporte.length,
-                monto: prestacionesReporte.reduce((sum, p) => sum + p.monto, 0)
+                monto: prestacionesNoCanceladas.reduce((sum, p) => sum + (p.monto || 0), 0)
             };
 
             return {

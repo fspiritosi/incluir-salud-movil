@@ -108,29 +108,44 @@ export default function PrestacionesPage() {
       let resultado: ObtenerPrestacionesResult | ObtenerPrestacionesRangoResult | ObtenerPrestacionesMesResult;
 
       // Cargar según el filtro seleccionado
-      switch (dateFilter) {
-        case 'today':
-          resultado = await prestacionService.obtenerPrestacionesDelDia(undefined, forceRefresh);
-          break;
-        case 'week':
-          resultado = await prestacionService.obtenerPrestacionesUltimaSemana(undefined, forceRefresh);
-          break;
-        case 'month':
-          resultado = await prestacionService.obtenerPrestacionesDelMes();
-          break;
-        case 'custom':
-          if (customDateRange) {
-            resultado = await prestacionService.obtenerPrestacionesPorRango(
-              customDateRange.start,
-              customDateRange.end
-            );
-          } else {
-            // Fallback a última semana si no hay rango personalizado
+      try {
+        switch (dateFilter) {
+          case 'today':
+            resultado = await prestacionService.obtenerPrestacionesDelDia(undefined, forceRefresh);
+            break;
+          case 'week':
             resultado = await prestacionService.obtenerPrestacionesUltimaSemana(undefined, forceRefresh);
+            break;
+          case 'month':
+            resultado = await prestacionService.obtenerPrestacionesDelMes();
+            break;
+          case 'custom':
+            if (customDateRange) {
+              resultado = await prestacionService.obtenerPrestacionesPorRango(
+                customDateRange.start,
+                customDateRange.end
+              );
+            } else {
+              // Fallback a última semana si no hay rango personalizado
+              resultado = await prestacionService.obtenerPrestacionesUltimaSemana(undefined, forceRefresh);
+            }
+            break;
+          default:
+            resultado = await prestacionService.obtenerPrestacionesUltimaSemana(undefined, forceRefresh);
+        }
+      } catch (filterError) {
+        // Si falla y estamos offline, intentar cargar al menos el día actual como fallback
+        if (!connectivity.isConnected) {
+          console.log('⚠️ Error cargando con filtro seleccionado, intentando fallback a día actual...');
+          try {
+            resultado = await prestacionService.obtenerPrestacionesDelDia(undefined, false);
+            console.log('✅ Fallback exitoso: usando cache del día actual');
+          } catch (fallbackError) {
+            throw filterError; // Lanzar el error original si el fallback también falla
           }
-          break;
-        default:
-          resultado = await prestacionService.obtenerPrestacionesUltimaSemana(undefined, forceRefresh);
+        } else {
+          throw filterError; // Si hay conexión, lanzar el error
+        }
       }
 
       setPrestacionesPendientes(resultado.pendientes);

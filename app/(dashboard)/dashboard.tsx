@@ -1,6 +1,6 @@
 import { Session } from '@supabase/supabase-js';
 import { router } from 'expo-router';
-import { Building2, CheckCircle, Clock, FileText, Settings } from 'lucide-react-native';
+import { AlertTriangle, Building2, CheckCircle, Clock, FileText, Settings } from 'lucide-react-native';
 import React, { useEffect, useState } from 'react';
 import { Image, Platform, RefreshControl, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -18,6 +18,7 @@ export default function DashboardPage() {
     const [session, setSession] = useState<Session | null>(null);
     const [prestacionesCompletadas, setPrestacionesCompletadas] = useState<PrestacionCompleta[]>([]);
     const [prestacionesPendientes, setPrestacionesPendientes] = useState<PrestacionCompleta[]>([]);
+    const [prestacionesPerdidasAyer, setPrestacionesPerdidasAyer] = useState<PrestacionCompleta[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
 
@@ -56,6 +57,10 @@ export default function DashboardPage() {
 
             // Luego cargar datos del mes completo
             const datosMensuales = await prestacionService.obtenerPrestacionesDelMes();
+
+            // Cargar prestaciones perdidas del día anterior
+            const perdidasAyer = await prestacionService.obtenerPrestacionesPerdidasAyer();
+            setPrestacionesPerdidasAyer(perdidasAyer);
 
             // Ordenar por fecha (más recientes primero)
             const completadasOrdenadas = datosMensuales.completadas
@@ -163,6 +168,39 @@ export default function DashboardPage() {
                     </View>
                 </View>
             </View>
+
+            {/* Aviso de Prestaciones Pendientes de Ayer */}
+            {!loading && prestacionesPerdidasAyer.length > 0 && (
+                <View className="px-6 pt-4">
+                    <Card className="bg-amber-50 border-amber-200">
+                        <CardContent className="p-4">
+                            <View className="flex-row items-start gap-3">
+                                <AlertTriangle size={24} className="text-amber-600 mt-0.5" />
+                                <View className="flex-1">
+                                    <Text variant="large" className="font-semibold text-amber-900 mb-1">
+                                        Prestaciones Pendientes de Ayer
+                                    </Text>
+                                    <Text variant="small" className="text-amber-700 mb-2">
+                                        {prestacionesPerdidasAyer.length} prestación{prestacionesPerdidasAyer.length > 1 ? 'es' : ''} programada{prestacionesPerdidasAyer.length > 1 ? 's' : ''} para ayer {prestacionesPerdidasAyer.length > 1 ? 'no fueron completadas' : 'no fue completada'}. Tienes 6 días más para completarla{prestacionesPerdidasAyer.length > 1 ? 's' : ''} (tienes hasta 1 semana desde la fecha programada).
+                                    </Text>
+                                    {prestacionesPerdidasAyer.slice(0, 3).map((prestacion) => (
+                                        <View key={prestacion.prestacion_id} className="mb-1">
+                                            <Text variant="small" className="text-amber-800">
+                                                • {prestacion.tipo_prestacion.charAt(0).toUpperCase() + prestacion.tipo_prestacion.slice(1)} - {prestacion.paciente_nombre} ({formatTime(prestacion.fecha)})
+                                            </Text>
+                                        </View>
+                                    ))}
+                                    {prestacionesPerdidasAyer.length > 3 && (
+                                        <Text variant="small" className="text-amber-700 italic">
+                                            y {prestacionesPerdidasAyer.length - 3} más...
+                                        </Text>
+                                    )}
+                                </View>
+                            </View>
+                        </CardContent>
+                    </Card>
+                </View>
+            )}
 
             {/* Prestaciones Completadas */}
             <View className="p-6">

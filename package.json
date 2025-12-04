@@ -1,6 +1,6 @@
 {
   "name": "expo-user-management",
-  "version": "1.0.35",
+  "version": "1.0.36",
   "main": "index.ts",
   "scripts": {
     "start": "expo start --tunnel",
@@ -10,6 +10,9 @@
     "lint": "expo lint",
     "gentypes": "npx supabase gen types typescript --project-id gdzhrpwsqmlgmuqeusrn --schema public > database.types.ts",
     "deploy": "eas build --profile preview --platform android",
+    "deploy:ios": "eas build --profile production --platform ios",
+    "deploy:ios:submit": "eas submit --platform ios",
+    "deploy:ios:auto": "eas build --profile production --platform ios --auto-submit",
     "update": "npm version patch --no-git-tag-version && eas update --branch preview"
   },
   "dependencies": {

@@ -22,10 +22,11 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import { Text } from '@/components/ui/text';
-import { reporteService, type ReporteData } from '@/services/reporteService';
-import { File as FSFile, Paths } from 'expo-file-system';
+import { reporteService, type ReporteData, type PacienteReporte } from '@/services/reporteService';
+import { File as FSFile, Paths, EncodingType } from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
 import { FileDown } from 'lucide-react-native';
 import moment from 'moment-timezone';
 import React, { useEffect, useState } from 'react';
@@ -33,7 +34,8 @@ import {
     ActivityIndicator,
     Platform,
     ScrollView,
-    View
+    View,
+    Image
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -59,6 +61,8 @@ export default function ReportesScreen() {
     const [estado, setEstado] = useState<
         'todos' | 'pendiente' | 'completada' | 'cancelada' | 'en_proceso'
     >('todos');
+    const [pacienteId, setPacienteId] = useState<string | undefined>(undefined);
+    const [pacientes, setPacientes] = useState<PacienteReporte[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
     const [reporteData, setReporteData] = useState<ReporteData | null>(null);
@@ -95,6 +99,19 @@ export default function ReportesScreen() {
         setCustomDateRange(range);
     };
 
+    // Cargar pacientes al montar el componente
+    useEffect(() => {
+        const cargarPacientes = async () => {
+            try {
+                const pacientesList = await reporteService.obtenerPacientes();
+                setPacientes(pacientesList);
+            } catch (error) {
+                console.error('Error cargando pacientes:', error);
+            }
+        };
+        cargarPacientes();
+    }, []);
+
     const showAlert = (title: string, message: string) => {
         setAlertTitle(title);
         setAlertMessage(message);
@@ -107,7 +124,8 @@ export default function ReportesScreen() {
             const data = await reporteService.obtenerReportePropio(
                 fechaInicio,
                 fechaFin,
-                estado
+                estado,
+                pacienteId
             );
             setReporteData(data);
 
@@ -165,6 +183,13 @@ export default function ReportesScreen() {
             setIsGeneratingPDF(true);
             const { prestador, prestaciones, totales } = reporteData;
 
+            // Nota: Para incluir el logo en el PDF, se puede usar una URL pública
+            // o convertir la imagen a base64. Por ahora usamos un placeholder.
+            // El logo se puede agregar después desde una URL pública o base64.
+            const logoHtml = `<div style="text-align: center; margin-bottom: 20px;">
+                <div style="font-size: 24px; font-weight: bold; color: #3b82f6;">INCLUIR SALUD</div>
+            </div>`;
+
             const filasTabla = prestaciones.map(p => `
                 <tr>
                     <td style="padding: 8px; border: 1px solid #ddd;">${moment(p.fecha).tz(TIMEZONE).format('DD/MM/YYYY')}</td>
@@ -183,8 +208,11 @@ export default function ReportesScreen() {
                     <meta charset="utf-8">
                     <style>
                         body { font-family: Arial, sans-serif; padding: 20px; }
-                        h1 { text-align: center; color: #1f2937; }
-                        h2 { text-align: center; color: #6b7280; font-size: 18px; }
+                        .header { text-align: center; margin-bottom: 30px; }
+                        .logo-container { margin-bottom: 15px; }
+                        .logo { max-width: 120px; max-height: 120px; margin: 0 auto; }
+                        h1 { color: #1f2937; margin: 10px 0; }
+                        h2 { color: #6b7280; font-size: 18px; margin: 5px 0; }
                         .section { margin: 20px 0; }
                         .section-title { font-weight: bold; font-size: 14px; margin-bottom: 10px; color: #374151; }
                         .info-row { margin: 5px 0; font-size: 12px; }
@@ -198,8 +226,10 @@ export default function ReportesScreen() {
                     </style>
                 </head>
                 <body>
-                    <h1>REPORTE DE PRESTACIONES</h1>
-                    <h2>INCLUIR SALUD</h2>
+                    <div class="header">
+                        ${logoHtml}
+                        <h1>REPORTE DE PRESTACIONES</h1>
+                    </div>
                     <div class="section">
                         <div class="section-title">DATOS DEL PRESTADOR</div>
                         <div class="info-row"><span class="info-label">Nombre:</span> ${prestador.apellido}, ${prestador.nombre}</div>
@@ -332,6 +362,35 @@ export default function ReportesScreen() {
                                     <SelectItem label="Completadas" value="completada" />
                                     <SelectItem label="Canceladas" value="cancelada" />
                                     <SelectItem label="En Proceso" value="en_proceso" />
+                                </SelectContent>
+                            </Select>
+                        </View>
+
+                        {/* Paciente */}
+                        <View>
+                            <Text variant="small" className="font-medium mb-2">
+                                Paciente
+                            </Text>
+                            <Select
+                                value={pacienteId ? { value: pacienteId, label: pacientes.find(p => p.id === pacienteId)?.apellido + ', ' + pacientes.find(p => p.id === pacienteId)?.nombre || 'Paciente' } : undefined}
+                                onValueChange={(option) => {
+                                    if (option?.value) {
+                                        setPacienteId(option.value === 'todos' ? undefined : option.value);
+                                    }
+                                }}
+                            >
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Todos los pacientes" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem label="Todos los pacientes" value="todos" />
+                                    {pacientes.map((paciente) => (
+                                        <SelectItem 
+                                            key={paciente.id} 
+                                            label={`${paciente.apellido}, ${paciente.nombre} (${paciente.documento})`} 
+                                            value={paciente.id} 
+                                        />
+                                    ))}
                                 </SelectContent>
                             </Select>
                         </View>

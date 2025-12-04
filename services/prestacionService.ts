@@ -899,6 +899,80 @@ class PrestacionService {
 
     return this.obtenerPrestacionesPorRango(inicioMes, finMes, userId);
   }
+
+  // Obtener prestaciones pendientes del día anterior (programadas para ayer pero no completadas)
+  // Nota: Estas prestaciones aún pueden completarse ya que tienen hasta 1 semana desde la fecha programada
+  async obtenerPrestacionesPerdidasAyer(userId?: string): Promise<PrestacionCompleta[]> {
+    try {
+      const isOnline = await connectivityService.isOnline();
+      
+      // Solo funciona online, no hay cache para esto
+      if (!isOnline) {
+        return [];
+      }
+
+      const { data: { user } } = await supabase.auth.getUser();
+      const currentUserId = userId || user?.id;
+
+      if (!currentUserId) {
+        throw new Error('Usuario no autenticado');
+      }
+
+      // Obtener rango de fechas del día anterior en hora Argentina
+      const ahora = moment.tz(this.TIMEZONE);
+      const ayer = ahora.clone().subtract(1, 'day');
+      const inicioAyerArgentina = ayer.clone().startOf('day');
+      const finAyerArgentina = ayer.clone().endOf('day');
+
+      // Convertir a UTC para la consulta
+      const inicioAyerUTC = inicioAyerArgentina.clone().utc().toISOString();
+      const finAyerUTC = finAyerArgentina.clone().utc().toISOString();
+
+      console.log(`📅 Consultando prestaciones pendientes de ayer:
+        - Argentina: ${inicioAyerArgentina.format('YYYY-MM-DD HH:mm:ss')} a ${finAyerArgentina.format('YYYY-MM-DD HH:mm:ss')}
+        - UTC: ${inicioAyerUTC} a ${finAyerUTC}`);
+
+      // Query usando RPC para obtener coordenadas extraídas
+      const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_con_coordenadas', {
+        p_user_id: currentUserId,
+        p_fecha_inicio: inicioAyerUTC,
+        p_fecha_fin: finAyerUTC
+      });
+
+      if (error) {
+        console.error('Error obteniendo prestaciones pendientes de ayer:', error);
+        throw error;
+      }
+
+      // Transformar datos y filtrar solo las pendientes (programadas para ayer pero no completadas)
+      // Estas prestaciones aún pueden completarse (tienen hasta 1 semana desde la fecha programada)
+      const prestacionesPerdidas: PrestacionCompleta[] = (prestaciones || [])
+        .filter((p: any) => p.estado === 'pendiente') // Solo las que siguen pendientes
+        .map((p: any) => {
+          return {
+            prestacion_id: p.id,
+            descripcion: p.descripcion || `${p.tipo_prestacion} - ${p.paciente_nombre} ${p.paciente_apellido}`,
+            fecha: p.fecha,
+            monto: p.monto,
+            paciente_nombre: `${p.paciente_nombre} ${p.paciente_apellido}`,
+            paciente_direccion: p.paciente_direccion_completa,
+            paciente_telefono: p.paciente_telefono,
+            ubicacion_paciente_lat: p.paciente_lat || 0,
+            ubicacion_paciente_lng: p.paciente_lng || 0,
+            obra_social: p.obra_social_nombre || 'Sin obra social',
+            estado: p.estado,
+            tipo_prestacion: p.tipo_prestacion,
+            notas: p.notas || undefined,
+            paciente_id: p.paciente_id
+          };
+        });
+
+      return prestacionesPerdidas;
+    } catch (error) {
+      console.error('Error obteniendo prestaciones pendientes de ayer:', error);
+      return [];
+    }
+  }
 }
 
 export const prestacionService = new PrestacionService();
