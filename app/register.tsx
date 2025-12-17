@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, ScrollView, Image } from 'react-native';
+import { View, ScrollView, Image, TouchableOpacity } from 'react-native';
 import { router } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { Session } from '@supabase/supabase-js';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Text } from '../components/ui/text';
+import { Eye, EyeOff } from 'lucide-react-native';
 import {
     Select,
     SelectContent,
@@ -28,6 +29,8 @@ export default function RegisterPage() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
+    const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
     // Estados para modales
     const [errorModalOpen, setErrorModalOpen] = useState(false);
@@ -143,24 +146,50 @@ export default function RegisterPage() {
 
                         <View className="mb-4">
                             <Text variant="small" className="mb-2">Contraseña</Text>
-                            <Input
-                                onChangeText={(text: string) => setPassword(text)}
-                                value={password}
-                                secureTextEntry={true}
-                                placeholder="Mínimo 6 caracteres"
-                                autoCapitalize="none"
-                            />
+                            <View className="relative">
+                                <Input
+                                    onChangeText={(text: string) => setPassword(text)}
+                                    value={password}
+                                    secureTextEntry={!showPassword}
+                                    placeholder="Mínimo 6 caracteres"
+                                    autoCapitalize="none"
+                                    className="pr-10"
+                                />
+                                <TouchableOpacity
+                                    onPress={() => setShowPassword(!showPassword)}
+                                    className="absolute right-3 top-3"
+                                >
+                                    {showPassword ? (
+                                        <EyeOff size={18} className="text-muted-foreground" />
+                                    ) : (
+                                        <Eye size={18} className="text-muted-foreground" />
+                                    )}
+                                </TouchableOpacity>
+                            </View>
                         </View>
 
                         <View className="mb-4">
                             <Text variant="small" className="mb-2">Confirmar Contraseña</Text>
-                            <Input
-                                onChangeText={(text: string) => setConfirmPassword(text)}
-                                value={confirmPassword}
-                                secureTextEntry={true}
-                                placeholder="Repite tu contraseña"
-                                autoCapitalize="none"
-                            />
+                            <View className="relative">
+                                <Input
+                                    onChangeText={(text: string) => setConfirmPassword(text)}
+                                    value={confirmPassword}
+                                    secureTextEntry={!showConfirmPassword}
+                                    placeholder="Repite tu contraseña"
+                                    autoCapitalize="none"
+                                    className="pr-10"
+                                />
+                                <TouchableOpacity
+                                    onPress={() => setShowConfirmPassword(!showConfirmPassword)}
+                                    className="absolute right-3 top-3"
+                                >
+                                    {showConfirmPassword ? (
+                                        <EyeOff size={18} className="text-muted-foreground" />
+                                    ) : (
+                                        <Eye size={18} className="text-muted-foreground" />
+                                    )}
+                                </TouchableOpacity>
+                            </View>
                         </View>
 
                         <View className="mb-4">

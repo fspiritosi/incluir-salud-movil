@@ -16,6 +16,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.incluir.app",
+      "buildNumber": "3",
       "usesNonExemptEncryption": false,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
@@ -56,7 +57,7 @@
         "projectId": "fa5be556-ac2f-44d0-ae93-202d1de13e30"
       }
     },
-    "owner": "yordanpz",
+    "owner": "codecontrol",
     "runtimeVersion": "1.0.0",
     "updates": {
       "url": "https://u.expo.dev/fa5be556-ac2f-44d0-ae93-202d1de13e30"

@@ -2,13 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { View, ScrollView, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { supabase } from '../../lib/supabase';
+import { supabase, supabaseAdmin } from '../../lib/supabase';
 import { Session } from '@supabase/supabase-js';
 import { Text } from '../../components/ui/text';
 import { Card, CardContent, CardHeader } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '../../components/ui/avatar';
+import { Skeleton } from '../../components/ui/skeleton';
 
 import { 
   AlertDialog,
@@ -20,8 +21,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '../../components/ui/alert-dialog';
-import { User, Mail, Lock, LogOut, RefreshCw } from 'lucide-react-native';
+import { User, Mail, Lock, LogOut, RefreshCw, CheckCircle, DollarSign, Trash2, AlertTriangle } from 'lucide-react-native';
 import * as Updates from 'expo-updates';
+import { prestacionService } from '../../services/prestacionService';
+import moment from 'moment-timezone';
 
 export default function PerfilPage() {
     const insets = useSafeAreaInsets();
@@ -32,6 +35,9 @@ export default function PerfilPage() {
     
     // Estados para modales
     const [signOutModalOpen, setSignOutModalOpen] = useState(false);
+    const [deleteAccountModalOpen, setDeleteAccountModalOpen] = useState(false);
+    const [deleteAccountConfirmModalOpen, setDeleteAccountConfirmModalOpen] = useState(false);
+    const [deletingAccount, setDeletingAccount] = useState(false);
     const [successModalOpen, setSuccessModalOpen] = useState(false);
     const [successMessage, setSuccessMessage] = useState('');
     const [errorModalOpen, setErrorModalOpen] = useState(false);
@@ -42,6 +48,13 @@ export default function PerfilPage() {
     const [phone, setPhone] = useState('');
     const [avatarUrl, setAvatarUrl] = useState('');
     const [updateStatus, setUpdateStatus] = useState('');
+    const [tipoPrestador, setTipoPrestador] = useState<string | null>(null);
+    const [estadisticas, setEstadisticas] = useState<{
+        totalCompletadas: number;
+        promedioMensual: number;
+        montoTotal: number;
+    } | null>(null);
+    const [cargandoEstadisticas, setCargandoEstadisticas] = useState(false);
 
     useEffect(() => {
         supabase.auth.getSession().then(({ data: { session } }) => {
@@ -65,13 +78,55 @@ export default function PerfilPage() {
         return () => subscription.unsubscribe();
     }, []);
 
-    const loadProfile = (session: Session) => {
+    const loadProfile = async (session: Session) => {
         const metadata = session.user.user_metadata || {};
         setFirstName(metadata.first_name || '');
         setLastName(metadata.last_name || '');
         setDocumentNumber(metadata.document_number || '');
         setPhone(metadata.phone || '');
         setAvatarUrl(metadata.avatar_url || '');
+
+        // Cargar tipo de prestador desde profiles
+        try {
+            const { data: profile } = await supabase
+                .from('profiles')
+                .select('tipo_prestador')
+                .eq('id', session.user.id)
+                .single();
+            
+            if (profile?.tipo_prestador) {
+                setTipoPrestador(profile.tipo_prestador);
+            }
+        } catch (error) {
+            console.error('Error cargando tipo de prestador:', error);
+        }
+
+        // Cargar estadísticas del mes actual
+        cargarEstadisticas();
+    };
+
+    const cargarEstadisticas = async () => {
+        try {
+            setCargandoEstadisticas(true);
+            const datosMes = await prestacionService.obtenerPrestacionesDelMes();
+            
+            const completadas = datosMes.completadas;
+            const totalCompletadas = completadas.length;
+            const montoTotal = completadas.reduce((sum, p) => sum + (p.monto || 0), 0);
+            
+            // Promedio mensual (del mes actual)
+            const promedioMensual = totalCompletadas;
+
+            setEstadisticas({
+                totalCompletadas,
+                promedioMensual,
+                montoTotal
+            });
+        } catch (error) {
+            console.error('Error cargando estadísticas:', error);
+        } finally {
+            setCargandoEstadisticas(false);
+        }
     };
 
     const updateProfile = async () => {
@@ -116,6 +171,59 @@ export default function PerfilPage() {
         await supabase.auth.signOut();
         router.replace('/');
         setSignOutModalOpen(false);
+    };
+
+    const handleDeleteAccount = () => {
+        setDeleteAccountModalOpen(true);
+    };
+
+    const confirmDeleteAccount = () => {
+        setDeleteAccountModalOpen(false);
+        setDeleteAccountConfirmModalOpen(true);
+    };
+
+    const executeDeleteAccount = async () => {
+        if (!session) return;
+
+        try {
+            setDeletingAccount(true);
+            const userId = session.user.id;
+
+            // 1. Eliminar el usuario usando Admin API (baneando permanentemente)
+            // Baneo permanente (876000 horas = ~100 años, efectivamente permanente)
+            const { error: banError } = await supabaseAdmin.auth.admin.updateUserById(
+                userId,
+                {
+                    ban_duration: '876000h' // Baneo permanente (~100 años)
+                }
+            );
+
+            if (banError) {
+                console.error('Error eliminando cuenta:', banError);
+                throw new Error('No se pudo eliminar la cuenta. Por favor, contacta al soporte.');
+            }
+
+            // 2. Cerrar sesión y redirigir
+            await supabase.auth.signOut();
+            
+            setDeleteAccountConfirmModalOpen(false);
+            setSuccessMessage('Tu cuenta ha sido borrada exitosamente. Ya no podrás iniciar sesión.');
+            setSuccessModalOpen(true);
+            
+            // Redirigir después de un breve delay
+            setTimeout(() => {
+                router.replace('/');
+            }, 2000);
+        } catch (error) {
+            console.error('Error eliminando cuenta:', error);
+            setErrorMessage(
+                error instanceof Error 
+                    ? error.message 
+                    : 'Error al eliminar la cuenta. Por favor, contacta al soporte si el problema persiste.'
+            );
+            setErrorModalOpen(true);
+            setDeletingAccount(false);
+        }
     };
 
     const checkForUpdates = async () => {
@@ -255,6 +363,53 @@ export default function PerfilPage() {
                 </CardContent>
             </Card>
 
+            {/* Estadísticas del Mes */}
+            <Card className="mx-6 mb-4">
+                <CardHeader>
+                    <Text variant="h3">Estadísticas del Mes Actual</Text>
+                </CardHeader>
+                <CardContent className="pt-0">
+                    {cargandoEstadisticas ? (
+                        <View className="py-4 gap-3">
+                            <Skeleton className="w-full h-4" />
+                            <Skeleton className="w-full h-4" />
+                            <Skeleton className="w-full h-4" />
+                        </View>
+                    ) : estadisticas ? (
+                        <>
+                            <View className="flex-row items-center gap-3 py-3 border-b border-border">
+                                <CheckCircle size={20} className="text-green-500" />
+                                <View className="flex-1">
+                                    <Text variant="small" className="font-medium">Total Completadas</Text>
+                                    <Text variant="large" className="font-bold">{estadisticas.totalCompletadas}</Text>
+                                </View>
+                            </View>
+                            <View className="flex-row items-center gap-3 py-3 border-b border-border">
+                                <DollarSign size={20} className="text-green-500" />
+                                <View className="flex-1">
+                                    <Text variant="small" className="font-medium">Monto Total</Text>
+                                    <Text variant="large" className="font-bold text-green-600">
+                                        {new Intl.NumberFormat('es-AR', {
+                                            style: 'currency',
+                                            currency: 'ARS'
+                                        }).format(estadisticas.montoTotal)}
+                                    </Text>
+                                </View>
+                            </View>
+                            <View className="flex-row items-center gap-3 py-3">
+                                <User size={20} className="text-blue-500" />
+                                <View className="flex-1">
+                                    <Text variant="small" className="font-medium">Promedio Mensual</Text>
+                                    <Text variant="large" className="font-bold">{estadisticas.promedioMensual}</Text>
+                                </View>
+                            </View>
+                        </>
+                    ) : (
+                        <Text variant="muted">No hay estadísticas disponibles</Text>
+                    )}
+                </CardContent>
+            </Card>
+
             {/* Account Information */}
             <Card className="mx-6 mb-4">
                 <CardHeader>
@@ -269,6 +424,13 @@ export default function PerfilPage() {
                     <View className="flex-row justify-between items-center py-2 border-b border-border">
                         <Text variant="small" className="font-medium">Documento:</Text>
                         <Text variant="muted">{documentNumber || 'No especificado'}</Text>
+                    </View>
+
+                    <View className="flex-row justify-between items-center py-2 border-b border-border">
+                        <Text variant="small" className="font-medium">Tipo de Prestador:</Text>
+                        <Text variant="muted" className="capitalize">
+                            {tipoPrestador ? tipoPrestador.replace(/_/g, ' ') : 'No especificado'}
+                        </Text>
                     </View>
 
                     <View className="flex-row justify-between items-center py-2 border-b border-border">
@@ -352,6 +514,27 @@ export default function PerfilPage() {
                 </Button>
             </View>
 
+            {/* Sección de Eliminar Cuenta - Separada */}
+            <Card className="mx-6 mb-4 mt-4 border-red-200">
+                <CardContent className="pt-6">
+                    <View className="items-center gap-3">
+                        <Text variant="small" className="text-center text-muted-foreground mb-2">
+                            Si deseas eliminar tu cuenta permanentemente
+                        </Text>
+                        <Button
+                            variant="destructive"
+                            onPress={handleDeleteAccount}
+                            className="w-full"
+                        >
+                            <View className="flex-row items-center gap-2">
+                                <Trash2 size={20} className="text-destructive-foreground" />
+                                <Text className="text-destructive-foreground font-medium">Eliminar Cuenta</Text>
+                            </View>
+                        </Button>
+                    </View>
+                </CardContent>
+            </Card>
+
             <View className="h-10" />
         </ScrollView>
 
@@ -421,6 +604,76 @@ export default function PerfilPage() {
                 <AlertDialogFooter>
                     <AlertDialogAction onPress={() => setInfoModalOpen(false)}>
                         <Text>OK</Text>
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Modal de Advertencia para Eliminar Cuenta */}
+        <AlertDialog open={deleteAccountModalOpen} onOpenChange={setDeleteAccountModalOpen}>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <View className="flex-row items-center gap-2 mb-2">
+                        <AlertTriangle size={24} className="text-red-500" />
+                        <AlertDialogTitle className="text-red-500">Eliminar Cuenta</AlertDialogTitle>
+                    </View>
+                    <AlertDialogDescription>
+                        <Text className="mb-3 pb-3">
+                            Esta acción es <Text className="font-bold">IRREVERSIBLE</Text> y eliminará permanentemente tu cuenta:
+                        </Text>
+                        <Text className="mt-5 font-semibold">
+                            ¿Estás seguro de que deseas continuar?
+                        </Text>
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel>
+                        <Text>Cancelar</Text>
+                    </AlertDialogCancel>
+                    <AlertDialogAction 
+                        onPress={confirmDeleteAccount}
+                        className="bg-red-600"
+                    >
+                        <Text className="text-white">Continuar</Text>
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Modal de Confirmación Final para Eliminar Cuenta */}
+        <AlertDialog open={deleteAccountConfirmModalOpen} onOpenChange={setDeleteAccountConfirmModalOpen}>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <View className="flex-row items-center gap-2 mb-2">
+                        <AlertTriangle size={24} className="text-red-500" />
+                        <AlertDialogTitle className="text-red-500">Confirmación Final</AlertDialogTitle>
+                    </View>
+                    <AlertDialogDescription>
+                        <Text className="mb-3 font-bold">
+                            Última oportunidad
+                        </Text>
+                        <Text className="mb-3">
+                            Esta acción eliminará permanentemente tu cuenta. No podrás iniciar sesión nuevamente. Esta operación no se puede deshacer.
+                        </Text>
+                        <Text className="mt-4 font-semibold">
+                            ¿Confirmas que deseas eliminar tu cuenta?
+                        </Text>
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel disabled={deletingAccount}>
+                        <Text>Cancelar</Text>
+                    </AlertDialogCancel>
+                    <AlertDialogAction 
+                        onPress={executeDeleteAccount}
+                        disabled={deletingAccount}
+                        className="bg-red-600"
+                    >
+                        {deletingAccount ? (
+                            <Text className="text-white">Eliminando...</Text>
+                        ) : (
+                            <Text className="text-white">Sí, Eliminar Cuenta</Text>
+                        )}
                     </AlertDialogAction>
                 </AlertDialogFooter>
             </AlertDialogContent>

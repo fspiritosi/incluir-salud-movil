@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, ScrollView, Image } from 'react-native';
+import { View, ScrollView, Image, TouchableOpacity } from 'react-native';
 import { router } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { Session } from '@supabase/supabase-js';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Text } from '../components/ui/text';
+import { Eye, EyeOff } from 'lucide-react-native';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,6 +21,7 @@ import {
 export default function LoginPage() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
 
     // Estados para modales
@@ -60,7 +62,12 @@ export default function LoginPage() {
         });
 
         if (error) {
-            setErrorMessage(error.message);
+            // Reemplazar mensaje de usuario baneado
+            let message = error.message;
+            if (error.message.toLowerCase().includes('banned') || error.message.toLowerCase().includes('ban')) {
+                message = 'Tu cuenta fue eliminada. No puedes iniciar sesión.';
+            }
+            setErrorMessage(message);
             setErrorModalOpen(true);
         }
         setLoading(false);
@@ -105,13 +112,26 @@ export default function LoginPage() {
 
                     <View className="mb-4">
                         <Text variant="small" className="mb-2">Contraseña</Text>
-                        <Input
-                            onChangeText={(text: string) => setPassword(text)}
-                            value={password}
-                            secureTextEntry={true}
-                            placeholder="Tu contraseña"
-                            autoCapitalize="none"
-                        />
+                        <View className="relative">
+                            <Input
+                                onChangeText={(text: string) => setPassword(text)}
+                                value={password}
+                                secureTextEntry={!showPassword}
+                                placeholder="Tu contraseña"
+                                autoCapitalize="none"
+                                className="pr-10"
+                            />
+                            <TouchableOpacity
+                                onPress={() => setShowPassword(!showPassword)}
+                                className="absolute right-3 top-3"
+                            >
+                                {showPassword ? (
+                                    <EyeOff size={18} className="text-muted-foreground" />
+                                ) : (
+                                    <Eye size={18} className="text-muted-foreground" />
+                                )}
+                            </TouchableOpacity>
+                        </View>
                     </View>
 
                     <Button

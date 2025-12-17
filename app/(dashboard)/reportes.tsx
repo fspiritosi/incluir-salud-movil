@@ -21,15 +21,17 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Text } from '@/components/ui/text';
 import { reporteService, type ReporteData, type PacienteReporte } from '@/services/reporteService';
+import { ChevronDown, ChevronUp } from 'lucide-react-native';
 import { File as FSFile, Paths, EncodingType } from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import { FileDown } from 'lucide-react-native';
 import moment from 'moment-timezone';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
     ActivityIndicator,
     Platform,
@@ -66,6 +68,9 @@ export default function ReportesScreen() {
     const [isLoading, setIsLoading] = useState(false);
     const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
     const [reporteData, setReporteData] = useState<ReporteData | null>(null);
+    const [reporteMesAnterior, setReporteMesAnterior] = useState<ReporteData | null>(null);
+    const [vistaPreviaAbierta, setVistaPreviaAbierta] = useState(false);
+    const [presetSeleccionado, setPresetSeleccionado] = useState<string | null>(null);
 
     // Estados para AlertDialog
     const [alertOpen, setAlertOpen] = useState(false);
@@ -129,6 +134,26 @@ export default function ReportesScreen() {
             );
             setReporteData(data);
 
+            // Si el filtro es "month", cargar también el mes anterior para comparación
+            if (dateFilter === 'month') {
+                try {
+                    const inicioMesAnterior = moment(fechaInicio).tz(TIMEZONE).subtract(1, 'month').startOf('month').toDate();
+                    const finMesAnterior = moment(fechaInicio).tz(TIMEZONE).subtract(1, 'month').endOf('month').toDate();
+                    const dataAnterior = await reporteService.obtenerReportePropio(
+                        inicioMesAnterior,
+                        finMesAnterior,
+                        estado,
+                        pacienteId
+                    );
+                    setReporteMesAnterior(dataAnterior);
+                } catch (error) {
+                    console.log('No se pudo cargar el mes anterior para comparación');
+                    setReporteMesAnterior(null);
+                }
+            } else {
+                setReporteMesAnterior(null);
+            }
+
             if (data.prestaciones.length === 0) {
                 showAlert(
                     'Sin resultados',
@@ -145,6 +170,60 @@ export default function ReportesScreen() {
             setIsLoading(false);
         }
     };
+
+    const aplicarPreset = (preset: string) => {
+        const now = moment().tz(TIMEZONE);
+        setPresetSeleccionado(preset);
+
+        switch (preset) {
+            case 'mes_actual_completadas':
+                setDateFilter('month');
+                setFechaInicio(now.clone().startOf('month').toDate());
+                setFechaFin(now.clone().endOf('month').toDate());
+                setEstado('completada');
+                break;
+            case 'mes_actual_pendientes':
+                setDateFilter('month');
+                setFechaInicio(now.clone().startOf('month').toDate());
+                setFechaFin(now.clone().endOf('month').toDate());
+                setEstado('pendiente');
+                break;
+            case 'mes_anterior_completadas':
+                setDateFilter('custom');
+                setFechaInicio(now.clone().subtract(1, 'month').startOf('month').toDate());
+                setFechaFin(now.clone().subtract(1, 'month').endOf('month').toDate());
+                setEstado('completada');
+                break;
+            case 'ultimos_3_meses':
+                setDateFilter('custom');
+                setFechaInicio(now.clone().subtract(3, 'months').startOf('month').toDate());
+                setFechaFin(now.clone().endOf('month').toDate());
+                setEstado('todos');
+                break;
+        }
+    };
+
+    // Calcular desglose por tipo
+    const desglosePorTipo = useMemo(() => {
+        if (!reporteData) return [];
+        
+        const desglose: { [key: string]: { cantidad: number; monto: number } } = {};
+        
+        reporteData.prestaciones.forEach(p => {
+            if (p.estado !== 'cancelada') {
+                if (!desglose[p.tipo_prestacion]) {
+                    desglose[p.tipo_prestacion] = { cantidad: 0, monto: 0 };
+                }
+                desglose[p.tipo_prestacion].cantidad++;
+                desglose[p.tipo_prestacion].monto += p.monto || 0;
+            }
+        });
+        
+        return Object.entries(desglose).map(([tipo, datos]) => ({
+            tipo,
+            ...datos
+        }));
+    }, [reporteData]);
 
     const formatearFecha = (fecha: Date) => {
         return moment(fecha).tz(TIMEZONE).format('DD/MM/YYYY');
@@ -395,6 +474,51 @@ export default function ReportesScreen() {
                             </Select>
                         </View>
 
+                        {/* Filtros Guardados (Presets) */}
+                        <View>
+                            <Text variant="small" className="font-medium mb-2">
+                                Filtros Rápidos
+                            </Text>
+                            <View className="flex-row flex-wrap gap-2">
+                                <Button
+                                    variant={presetSeleccionado === 'mes_actual_completadas' ? 'default' : 'outline'}
+                                    size="sm"
+                                    onPress={() => aplicarPreset('mes_actual_completadas')}
+                                >
+                                    <Text className={presetSeleccionado === 'mes_actual_completadas' ? 'text-primary-foreground' : 'text-foreground'}>
+                                        Mes Actual (Completadas)
+                                    </Text>
+                                </Button>
+                                <Button
+                                    variant={presetSeleccionado === 'mes_actual_pendientes' ? 'default' : 'outline'}
+                                    size="sm"
+                                    onPress={() => aplicarPreset('mes_actual_pendientes')}
+                                >
+                                    <Text className={presetSeleccionado === 'mes_actual_pendientes' ? 'text-primary-foreground' : 'text-foreground'}>
+                                        Mes Actual (Pendientes)
+                                    </Text>
+                                </Button>
+                                <Button
+                                    variant={presetSeleccionado === 'mes_anterior_completadas' ? 'default' : 'outline'}
+                                    size="sm"
+                                    onPress={() => aplicarPreset('mes_anterior_completadas')}
+                                >
+                                    <Text className={presetSeleccionado === 'mes_anterior_completadas' ? 'text-primary-foreground' : 'text-foreground'}>
+                                        Mes Anterior (Completadas)
+                                    </Text>
+                                </Button>
+                                <Button
+                                    variant={presetSeleccionado === 'ultimos_3_meses' ? 'default' : 'outline'}
+                                    size="sm"
+                                    onPress={() => aplicarPreset('ultimos_3_meses')}
+                                >
+                                    <Text className={presetSeleccionado === 'ultimos_3_meses' ? 'text-primary-foreground' : 'text-foreground'}>
+                                        Últimos 3 Meses
+                                    </Text>
+                                </Button>
+                            </View>
+                        </View>
+
                         {/* Botón Generar */}
                         <Button
                             onPress={handleGenerarReporte}
@@ -494,6 +618,142 @@ export default function ReportesScreen() {
                                 </View>
                             </CardContent>
                         </Card>
+
+                        {/* Comparación Mes Anterior */}
+                        {reporteMesAnterior && dateFilter === 'month' && (
+                            <Card className="bg-blue-50 border-blue-200">
+                                <CardHeader>
+                                    <CardTitle>
+                                        <Text>
+                                            Comparación con Mes Anterior
+                                        </Text>
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent className="gap-3">
+                                    <View className="flex-row justify-between">
+                                        <Text variant="small" className="font-semibold">
+                                            Mes Actual:
+                                        </Text>
+                                        <Text variant="small">
+                                            {reporteData.totales.cantidad} prestaciones - {formatearMonto(reporteData.totales.monto)}
+                                        </Text>
+                                    </View>
+                                    <View className="flex-row justify-between">
+                                        <Text variant="small" className="font-semibold">
+                                            Mes Anterior:
+                                        </Text>
+                                        <Text variant="small">
+                                            {reporteMesAnterior.totales.cantidad} prestaciones - {formatearMonto(reporteMesAnterior.totales.monto)}
+                                        </Text>
+                                    </View>
+                                    <View className="pt-2 border-t border-blue-200">
+                                        <View className="flex-row justify-between">
+                                            <Text variant="small" className="font-semibold">
+                                                Diferencia:
+                                            </Text>
+                                            <Text variant="small" className={reporteData.totales.monto >= reporteMesAnterior.totales.monto ? 'text-green-600' : 'text-red-600'}>
+                                                {reporteData.totales.cantidad - reporteMesAnterior.totales.cantidad > 0 ? '+' : ''}
+                                                {reporteData.totales.cantidad - reporteMesAnterior.totales.cantidad} prestaciones - 
+                                                {reporteData.totales.monto >= reporteMesAnterior.totales.monto ? '+' : ''}
+                                                {formatearMonto(reporteData.totales.monto - reporteMesAnterior.totales.monto)}
+                                            </Text>
+                                        </View>
+                                    </View>
+                                </CardContent>
+                            </Card>
+                        )}
+
+                        {/* Desglose por Tipo */}
+                        {desglosePorTipo.length > 0 && (
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle>
+                                        <Text>
+                                            Desglose por Tipo de Prestación
+                                        </Text>
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent className="gap-2">
+                                    {desglosePorTipo.map((item) => (
+                                        <View key={item.tipo} className="flex-row justify-between items-center py-2 border-b border-border last:border-0">
+                                            <View className="flex-1">
+                                                <Text variant="small" className="font-semibold capitalize">
+                                                    {item.tipo.replace(/_/g, ' ')}
+                                                </Text>
+                                                <Text variant="small" className="text-muted-foreground">
+                                                    {item.cantidad} prestación{item.cantidad !== 1 ? 'es' : ''}
+                                                </Text>
+                                            </View>
+                                            <Text variant="small" className="font-bold text-green-600">
+                                                {formatearMonto(item.monto)}
+                                            </Text>
+                                        </View>
+                                    ))}
+                                </CardContent>
+                            </Card>
+                        )}
+
+                        {/* Vista Previa */}
+                        <Collapsible open={vistaPreviaAbierta} onOpenChange={setVistaPreviaAbierta}>
+                            <CollapsibleTrigger asChild>
+                                <Button variant="outline" className="w-full">
+                                    <View className="flex-row items-center gap-2">
+                                        {vistaPreviaAbierta ? (
+                                            <ChevronUp size={16} className="text-foreground" />
+                                        ) : (
+                                            <ChevronDown size={16} className="text-foreground" />
+                                        )}
+                                        <Text className="text-foreground">
+                                            {vistaPreviaAbierta ? 'Ocultar' : 'Mostrar'} Vista Previa
+                                        </Text>
+                                    </View>
+                                </Button>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent>
+                                <Card className="mt-2">
+                                    <CardHeader>
+                                        <CardTitle>
+                                            <Text>
+                                                Vista Previa del Reporte
+                                            </Text>
+                                        </CardTitle>
+                                    </CardHeader>
+                                    <CardContent className="gap-3">
+                                        <View>
+                                            <Text variant="small" className="font-semibold mb-2">
+                                                Resumen:
+                                            </Text>
+                                            <Text variant="small" className="text-muted-foreground">
+                                                • {reporteData.totales.cantidad} prestaciones en total
+                                            </Text>
+                                            <Text variant="small" className="text-muted-foreground">
+                                                • Monto total: {formatearMonto(reporteData.totales.monto)}
+                                            </Text>
+                                            <Text variant="small" className="text-muted-foreground">
+                                                • Período: {formatearFecha(fechaInicio)} - {formatearFecha(fechaFin)}
+                                            </Text>
+                                        </View>
+                                        {desglosePorTipo.length > 0 && (
+                                            <View>
+                                                <Text variant="small" className="font-semibold mb-2">
+                                                    Por Tipo:
+                                                </Text>
+                                                {desglosePorTipo.slice(0, 3).map((item) => (
+                                                    <Text key={item.tipo} variant="small" className="text-muted-foreground">
+                                                        • {item.tipo.replace(/_/g, ' ')}: {item.cantidad} - {formatearMonto(item.monto)}
+                                                    </Text>
+                                                ))}
+                                                {desglosePorTipo.length > 3 && (
+                                                    <Text variant="small" className="text-muted-foreground italic">
+                                                        y {desglosePorTipo.length - 3} tipo{desglosePorTipo.length - 3 !== 1 ? 's' : ''} más...
+                                                    </Text>
+                                                )}
+                                            </View>
+                                        )}
+                                    </CardContent>
+                                </Card>
+                            </CollapsibleContent>
+                        </Collapsible>
 
                         {/* Botón de Descarga PDF */}
                         <Button

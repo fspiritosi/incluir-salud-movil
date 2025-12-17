@@ -47,3 +47,5 @@ eas-build-*.log
 # Environment variables (keep .env.example)
 .env
 !.env.example
+# Google Services
+operating-ally-411001-9514d7f2dbff.json
