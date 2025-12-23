@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { BarChart3, FileText, Home, User } from 'lucide-react-native';
+import { BarChart3, FileText, Home, Truck, User } from 'lucide-react-native';
 import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -43,6 +43,15 @@ export default function DashboardLayout() {
           title: 'Prestaciones',
           tabBarIcon: ({ color, size }) => (
             <FileText size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="transporte"
+        options={{
+          title: 'Transporte',
+          tabBarIcon: ({ color, size }) => (
+            <Truck size={size} color={color} />
           ),
         }}
       />
