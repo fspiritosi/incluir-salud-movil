@@ -774,6 +774,37 @@ export type Database = {
           started_at: string | null
         }[]
       }
+      obtener_prestaciones_con_coordenadas_v2: {
+        Args: { p_fecha_fin: string; p_fecha_inicio: string; p_user_id: string }
+        Returns: {
+          completed_at: string | null
+          descripcion: string
+          estado: Database["public"]["Enums"]["prestacion_estado"]
+          fecha: string
+          id: string
+          monto: number | null
+          notas: string | null
+          obra_social_nombre: string
+          paciente_apellido: string
+          paciente_direccion_completa: string
+          paciente_id: string
+          paciente_lat: number
+          paciente_lng: number
+          paciente_nombre: string
+          paciente_telefono: string
+          paciente_tiene_ubicacion_sugerida: boolean
+          tipo_prestacion: Database["public"]["Enums"]["tipo_prestacion"]
+          sentido_transporte: string | null
+          centro_id: string | null
+          centro_nombre: string | null
+          centro_direccion_completa: string | null
+          centro_lat: number | null
+          centro_lng: number | null
+          centro_radio_metros: number | null
+          centro_tiene_ubicacion_sugerida: boolean
+          started_at: string | null
+        }[]
+      }
       iniciar_prestacion_transporte: {
         Args: {
           prestacion_id: string
@@ -785,6 +816,18 @@ export type Database = {
           exito: boolean
           mensaje: string
           prestacion_actualizada: Json | null
+        }[]
+      }
+      sugerir_ubicacion_desde_prestacion: {
+        Args: {
+          p_prestacion_id: string
+          p_lat: number
+          p_lng: number
+          p_precision_m?: number
+        }
+        Returns: {
+          exito: boolean
+          mensaje: string
         }[]
       }
       finalizar_prestacion_transporte: {

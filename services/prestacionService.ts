@@ -58,6 +58,7 @@ export interface PrestacionCompleta {
   paciente_telefono: string;
   ubicacion_paciente_lat: number;
   ubicacion_paciente_lng: number;
+  paciente_tiene_ubicacion_sugerida?: boolean;
   obra_social: string;
   estado: 'pendiente' | 'completada' | 'cancelada' | 'en_proceso';
   tipo_prestacion: string;
@@ -68,6 +69,7 @@ export interface PrestacionCompleta {
   centro_lat?: number;
   centro_lng?: number;
   centro_radio_metros?: number;
+  centro_tiene_ubicacion_sugerida?: boolean;
   started_at?: string;
   notas?: string;
   paciente_id: string;
@@ -101,6 +103,31 @@ class PrestacionService {
     // Configurar moment.js con el timezone de Argentina y locale en español
     moment.tz.setDefault(this.TIMEZONE);
     moment.locale('es');
+  }
+
+  async sugerirUbicacionDesdePrestacion(
+    prestacionId: string,
+    ubicacionLat: number,
+    ubicacionLng: number,
+    precisionM?: number | null
+  ): Promise<{ exito: boolean; mensaje: string }> {
+    const { data, error } = await supabase.rpc('sugerir_ubicacion_desde_prestacion', {
+      p_prestacion_id: prestacionId,
+      p_lat: ubicacionLat,
+      p_lng: ubicacionLng,
+      p_precision_m: precisionM ?? null,
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    const payload = (data?.[0] as { exito: boolean; mensaje: string } | undefined) ?? {
+      exito: false,
+      mensaje: 'Respuesta inválida al sugerir ubicación',
+    };
+
+    return payload;
   }
 
   // Transporte: iniciar prestación (valida ORIGEN según sentido_transporte)
@@ -475,7 +502,7 @@ class PrestacionService {
         - UTC: ${inicioDelDiaUTC} a ${finDelDiaUTC}`);
 
       // Query usando RPC para obtener coordenadas extraídas
-      const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_con_coordenadas', {
+      const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_con_coordenadas_v2', {
         p_user_id: currentUserId,
         p_fecha_inicio: inicioDelDiaUTC,
         p_fecha_fin: finDelDiaUTC
@@ -498,6 +525,7 @@ class PrestacionService {
           paciente_telefono: p.paciente_telefono,
           ubicacion_paciente_lat: p.paciente_lat || 0,
           ubicacion_paciente_lng: p.paciente_lng || 0,
+          paciente_tiene_ubicacion_sugerida: Boolean(p.paciente_tiene_ubicacion_sugerida),
           obra_social: p.obra_social_nombre || 'Sin obra social',
           estado: p.estado,
           tipo_prestacion: p.tipo_prestacion,
@@ -508,6 +536,7 @@ class PrestacionService {
           centro_lat: typeof p.centro_lat === 'number' ? p.centro_lat : undefined,
           centro_lng: typeof p.centro_lng === 'number' ? p.centro_lng : undefined,
           centro_radio_metros: typeof p.centro_radio_metros === 'number' ? p.centro_radio_metros : undefined,
+          centro_tiene_ubicacion_sugerida: Boolean(p.centro_tiene_ubicacion_sugerida),
           started_at: p.started_at || undefined,
           notas: p.notas || undefined,
           paciente_id: p.paciente_id
@@ -1028,7 +1057,7 @@ class PrestacionService {
         - UTC: ${inicioUTC} a ${finUTC}`);
 
       // Query usando RPC para obtener coordenadas extraídas
-      const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_con_coordenadas', {
+      const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_con_coordenadas_v2', {
         p_user_id: currentUserId,
         p_fecha_inicio: inicioUTC,
         p_fecha_fin: finUTC
@@ -1051,6 +1080,7 @@ class PrestacionService {
           paciente_telefono: p.paciente_telefono,
           ubicacion_paciente_lat: p.paciente_lat || 0,
           ubicacion_paciente_lng: p.paciente_lng || 0,
+          paciente_tiene_ubicacion_sugerida: Boolean(p.paciente_tiene_ubicacion_sugerida),
           obra_social: p.obra_social_nombre || 'Sin obra social',
           estado: p.estado,
           tipo_prestacion: p.tipo_prestacion,
@@ -1061,6 +1091,7 @@ class PrestacionService {
           centro_lat: typeof p.centro_lat === 'number' ? p.centro_lat : undefined,
           centro_lng: typeof p.centro_lng === 'number' ? p.centro_lng : undefined,
           centro_radio_metros: typeof p.centro_radio_metros === 'number' ? p.centro_radio_metros : undefined,
+          centro_tiene_ubicacion_sugerida: Boolean(p.centro_tiene_ubicacion_sugerida),
           started_at: p.started_at || undefined,
           notas: p.notas || undefined,
           paciente_id: p.paciente_id
@@ -1142,7 +1173,7 @@ class PrestacionService {
         - UTC: ${inicioAyerUTC} a ${finAyerUTC}`);
 
       // Query usando RPC para obtener coordenadas extraídas
-      const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_con_coordenadas', {
+      const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_con_coordenadas_v2', {
         p_user_id: currentUserId,
         p_fecha_inicio: inicioAyerUTC,
         p_fecha_fin: finAyerUTC
@@ -1168,6 +1199,7 @@ class PrestacionService {
             paciente_telefono: p.paciente_telefono,
             ubicacion_paciente_lat: p.paciente_lat || 0,
             ubicacion_paciente_lng: p.paciente_lng || 0,
+            paciente_tiene_ubicacion_sugerida: Boolean(p.paciente_tiene_ubicacion_sugerida),
             obra_social: p.obra_social_nombre || 'Sin obra social',
             estado: p.estado,
             tipo_prestacion: p.tipo_prestacion,

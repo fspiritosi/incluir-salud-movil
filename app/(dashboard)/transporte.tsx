@@ -1,6 +1,6 @@
 import { Session } from '@supabase/supabase-js';
 import { router } from 'expo-router';
-import { Clock, MapPin, Phone, Truck } from 'lucide-react-native';
+import { Clock, Loader2, MapPin, Phone, Truck } from 'lucide-react-native';
 import moment from 'moment-timezone';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Linking, Platform, RefreshControl, ScrollView, View } from 'react-native';
@@ -9,6 +9,7 @@ import { useLocation } from '../../hooks/useLocation';
 import {
   AlertDialog,
   AlertDialogAction,
+  AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
@@ -58,12 +59,16 @@ export default function TransportePage() {
 
   const { requestLocation } = useLocation();
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+  const [suggestingLocationId, setSuggestingLocationId] = useState<string | null>(null);
 
   const [errorModalOpen, setErrorModalOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
   const [successModalOpen, setSuccessModalOpen] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
+
+  const [confirmSuggestOpen, setConfirmSuggestOpen] = useState(false);
+  const [prestacionParaSugerir, setPrestacionParaSugerir] = useState<PrestacionCompleta | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -201,6 +206,56 @@ export default function TransportePage() {
     Linking.openURL(url);
   };
 
+  const sugerirUbicacion = async (prestacion: PrestacionCompleta) => {
+    try {
+      const esDestino = prestacion.estado === 'en_proceso';
+      const target = prestacion.sentido_transporte === 'ida'
+        ? (esDestino ? 'centro' : 'paciente')
+        : (esDestino ? 'paciente' : 'centro');
+
+      const hasPendingSuggestion = target === 'centro'
+        ? Boolean(prestacion.centro_tiene_ubicacion_sugerida)
+        : Boolean(prestacion.paciente_tiene_ubicacion_sugerida);
+
+      if (hasPendingSuggestion) {
+        setErrorMessage('Ya existe una ubicación sugerida pendiente. Esperá a que sea revisada.');
+        setErrorModalOpen(true);
+        return;
+      }
+
+      setSuggestingLocationId(prestacion.prestacion_id);
+
+      const ubicacion = await requestLocation();
+      if (!ubicacion) {
+        setErrorMessage('No se pudo obtener tu ubicación. Verificá GPS y permisos.');
+        setErrorModalOpen(true);
+        return;
+      }
+
+      const resultado = await prestacionService.sugerirUbicacionDesdePrestacion(
+        prestacion.prestacion_id,
+        ubicacion.latitude,
+        ubicacion.longitude,
+        typeof ubicacion.accuracy === 'number' ? Math.round(ubicacion.accuracy) : null
+      );
+
+      if (resultado.exito) {
+        setSuccessMessage(resultado.mensaje || 'Sugerencia de ubicación enviada');
+        setSuccessModalOpen(true);
+        await loadData(false);
+      } else {
+        setErrorMessage(resultado.mensaje || 'No se pudo enviar la sugerencia de ubicación');
+        setErrorModalOpen(true);
+      }
+    } catch (e) {
+      console.error('Error sugiriendo ubicación (transporte):', e);
+      setErrorMessage('No se pudo enviar la sugerencia de ubicación. Intenta nuevamente.');
+      setErrorModalOpen(true);
+    } finally {
+      setSuggestingLocationId(null);
+    }
+  };
+
   const pendientesOrdenadas = useMemo(() => {
     return [...pendientes].sort((a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime());
   }, [pendientes]);
@@ -333,6 +388,53 @@ export default function TransportePage() {
                         </Button>
                       ) : null}
                     </View>
+
+                    <View className="flex-row gap-2 items-center mt-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1"
+                        onPress={() => {
+                          setPrestacionParaSugerir(p);
+                          setConfirmSuggestOpen(true);
+                        }}
+                        disabled={
+                          suggestingLocationId === p.prestacion_id ||
+                          (() => {
+                            const esDestino = p.estado === 'en_proceso';
+                            const target = p.sentido_transporte === 'ida'
+                              ? (esDestino ? 'centro' : 'paciente')
+                              : (esDestino ? 'paciente' : 'centro');
+                            return target === 'centro'
+                              ? Boolean(p.centro_tiene_ubicacion_sugerida)
+                              : Boolean(p.paciente_tiene_ubicacion_sugerida);
+                          })()
+                        }
+                      >
+                        <View className="flex-row items-center gap-2">
+                          {suggestingLocationId === p.prestacion_id ? (
+                            <Loader2 size={14} color="#6b7280" />
+                          ) : (
+                            <MapPin size={14} color="#6b7280" />
+                          )}
+                          <Text className="text-xs">
+                            {suggestingLocationId === p.prestacion_id
+                              ? 'Sugiriendo...'
+                              : (() => {
+                                const esDestino = p.estado === 'en_proceso';
+                                const target = p.sentido_transporte === 'ida'
+                                  ? (esDestino ? 'centro' : 'paciente')
+                                  : (esDestino ? 'paciente' : 'centro');
+                                const hasPending = target === 'centro'
+                                  ? Boolean(p.centro_tiene_ubicacion_sugerida)
+                                  : Boolean(p.paciente_tiene_ubicacion_sugerida);
+                                if (hasPending) return 'Sugerencia pendiente';
+                                return esDestino ? 'Sugerir ubicación (destino)' : 'Sugerir ubicación (origen)';
+                              })()}
+                          </Text>
+                        </View>
+                      </Button>
+                    </View>
                   </CardContent>
                 </Card>
               );
@@ -437,6 +539,45 @@ export default function TransportePage() {
           <AlertDialogFooter>
             <AlertDialogAction onPress={() => setSuccessModalOpen(false)}>
               <Text>OK</Text>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmSuggestOpen} onOpenChange={setConfirmSuggestOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirmar sugerencia</AlertDialogTitle>
+            <AlertDialogDescription>
+              {prestacionParaSugerir
+                ? (() => {
+                  const esDestino = prestacionParaSugerir.estado === 'en_proceso';
+                  const target = prestacionParaSugerir.sentido_transporte === 'ida'
+                    ? (esDestino ? 'centro' : 'paciente')
+                    : (esDestino ? 'paciente' : 'centro');
+                  const destinoLabel = esDestino ? 'destino (finalización)' : 'origen (inicio)';
+                  const aQuien = target === 'centro'
+                    ? (prestacionParaSugerir.centro_nombre || 'centro')
+                    : 'paciente';
+                  return `Vas a sugerir la ubicación del ${destinoLabel} para ${aQuien}. ¿Confirmás?`;
+                })()
+                : '¿Confirmás enviar la sugerencia de ubicación?'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>
+              <Text>Cancelar</Text>
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onPress={async () => {
+                if (prestacionParaSugerir) {
+                  setConfirmSuggestOpen(false);
+                  await sugerirUbicacion(prestacionParaSugerir);
+                  setPrestacionParaSugerir(null);
+                }
+              }}
+            >
+              <Text>Confirmar</Text>
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

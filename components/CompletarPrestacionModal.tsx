@@ -9,10 +9,11 @@ import {
   Phone,
   User
 } from 'lucide-react-native';
+import * as Location from 'expo-location';
 import React, { useState } from 'react';
 import { Linking, ScrollView, View } from 'react-native';
 import { useDevMode } from '../contexts/DevModeContext';
-import { useLocation } from '../hooks/useLocation';
+import { LocationData, useLocation } from '../hooks/useLocation';
 import {
   PrestacionCompleta,
   prestacionService,
@@ -53,11 +54,13 @@ interface Props {
 export default function CompletarPrestacionModal({ visible, prestacion, onClose, onSuccess }: Props) {
   const [notas, setNotas] = useState('');
   const [loading, setLoading] = useState(false);
+  const [suggestingLocation, setSuggestingLocation] = useState(false);
   const { requestLocation } = useLocation();
   const { settings } = useDevMode();
 
   // Estados para modales
   const [successModalOpen, setSuccessModalOpen] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
   const [errorModalOpen, setErrorModalOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [validationErrorModalOpen, setValidationErrorModalOpen] = useState(false);
@@ -67,8 +70,10 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
   const [limiteDiarioMessage, setLimiteDiarioMessage] = useState('');
   const [tiempoRestante, setTiempoRestante] = useState('');
 
+  const [confirmSuggestOpen, setConfirmSuggestOpen] = useState(false);
+
   // Estado para ubicación actual (para direcciones)
-  const [currentLocation, setCurrentLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [currentLocation, setCurrentLocation] = useState<LocationData | null>(null);
 
   if (!prestacion) return null;
 
@@ -106,6 +111,7 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
       );
 
       if (resultado.exito) {
+        setSuccessMessage('La prestación se completó exitosamente y se ha actualizado en el sistema.');
         setSuccessModalOpen(true);
       } else {
         // Verificar si es error de límite diario
@@ -177,13 +183,7 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
   };
 
   const handleContactSupport = () => {
-    setValidationErrorModalOpen(false);
     setContactModalOpen(true);
-  };
-
-  const handleWhatsApp = () => {
-    Linking.openURL('whatsapp://send?phone=+5491123456789&text=Necesito ayuda con validación de ubicación');
-    setContactModalOpen(false);
   };
 
   const handleCall = () => {
@@ -214,6 +214,79 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
 
     Linking.openURL(directionsUrl);
     setValidationErrorModalOpen(false);
+  };
+
+  const handleSuggestLocation = async () => {
+    try {
+      setSuggestingLocation(true);
+
+      if (prestacion.paciente_tiene_ubicacion_sugerida) {
+        setErrorMessage('Ya existe una ubicación sugerida pendiente para este paciente. Esperá a que sea revisada.');
+        setErrorModalOpen(true);
+        return;
+      }
+
+      const ubicacion = currentLocation ?? (await requestLocation());
+      if (!ubicacion) {
+        setErrorMessage('No se pudo obtener tu ubicación actual para sugerirla. Verificá GPS y permisos.');
+        setErrorModalOpen(true);
+        return;
+      }
+
+      setCurrentLocation(ubicacion);
+
+      let direccionAproximada: string | null = null;
+      try {
+        const results = await Location.reverseGeocodeAsync({
+          latitude: ubicacion.latitude,
+          longitude: ubicacion.longitude,
+        });
+        const first = results?.[0];
+        if (first) {
+          const parts = [
+            first.street,
+            first.streetNumber,
+            first.city,
+            first.region,
+            first.postalCode,
+            first.country,
+          ].filter(Boolean);
+          if (parts.length > 0) {
+            direccionAproximada = parts.join(' ');
+          }
+        }
+      } catch (_) {
+        direccionAproximada = null;
+      }
+
+      const resultado = await prestacionService.sugerirUbicacionDesdePrestacion(
+        prestacion.prestacion_id,
+        ubicacion.latitude,
+        ubicacion.longitude,
+        typeof ubicacion.accuracy === 'number' ? Math.round(ubicacion.accuracy) : null
+      );
+
+      if (resultado.exito) {
+        const extra = direccionAproximada ? `\n${direccionAproximada}` : '';
+        setSuccessMessage(`Sugerencia de ubicación enviada.${extra}`);
+        setSuccessModalOpen(true);
+        setValidationErrorModalOpen(false);
+        onSuccess();
+      } else {
+        setErrorMessage(resultado.mensaje || 'No se pudo enviar la sugerencia de ubicación');
+        setErrorModalOpen(true);
+      }
+    } catch (e) {
+      console.error('Error sugiriendo ubicación:', e);
+      setErrorMessage('No se pudo enviar la sugerencia de ubicación. Intenta nuevamente.');
+      setErrorModalOpen(true);
+    } finally {
+      setSuggestingLocation(false);
+    }
+  };
+
+  const handleConfirmSuggest = () => {
+    setConfirmSuggestOpen(true);
   };
 
   return (
@@ -250,6 +323,31 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
                       </Text>
                       <Button variant="ghost" size="sm" onPress={handleOpenMap}>
                         <Navigation size={12} color="#3b82f6" />
+                      </Button>
+                    </View>
+
+                    <View className="flex-row items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1"
+                        onPress={handleConfirmSuggest}
+                        disabled={suggestingLocation || Boolean(prestacion.paciente_tiene_ubicacion_sugerida)}
+                      >
+                        <View className="flex-row items-center gap-2">
+                          {suggestingLocation ? (
+                            <Loader2 size={14} color="#6b7280" />
+                          ) : (
+                            <MapPin size={14} color="#6b7280" />
+                          )}
+                          <Text className="text-xs">
+                            {suggestingLocation
+                              ? 'Sugiriendo...'
+                              : prestacion.paciente_tiene_ubicacion_sugerida
+                                ? 'Sugerencia pendiente'
+                                : 'Sugerir ubicación'}
+                          </Text>
+                        </View>
                       </Button>
                     </View>
 
@@ -334,26 +432,6 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
       </Dialog>
 
       {/* Modal de Éxito */}
-      <AlertDialog open={successModalOpen} onOpenChange={setSuccessModalOpen}>
-        <AlertDialogContent className="max-w-sm mx-6">
-          <AlertDialogHeader>
-            <View style={styles.modalIconContainer}>
-              <CheckCircle2 size={48} color="#10b981" />
-              <AlertDialogTitle style={styles.modalTitle}>¡Prestación Completada!</AlertDialogTitle>
-            </View>
-            <AlertDialogDescription style={styles.modalDescription}>
-              La prestación se completó exitosamente y se ha actualizado en el sistema.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogAction onPress={handleSuccessClose}>
-              <Text className="text-white font-medium">Continuar</Text>
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Modal de Error */}
       <AlertDialog open={errorModalOpen} onOpenChange={setErrorModalOpen}>
         <AlertDialogContent className="max-w-sm mx-6">
           <AlertDialogHeader>
@@ -396,6 +474,19 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
               </AlertDialogAction>
             )}
 
+            <AlertDialogAction
+              onPress={handleConfirmSuggest}
+              disabled={suggestingLocation}
+              style={styles.directionsButton}
+            >
+              <View style={styles.directionsButtonContent}>
+                <Navigation size={16} color="#ffffff" />
+                <Text className="text-white font-medium">
+                  {suggestingLocation ? 'Sugiriendo...' : 'Sugerir ubicación'}
+                </Text>
+              </View>
+            </AlertDialogAction>
+
             <AlertDialogAction onPress={handleContactSupport}>
               <Text className="text-white font-medium">Contactar Soporte</Text>
             </AlertDialogAction>
@@ -417,15 +508,37 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter style={styles.modalFooterColumn}>
-            <AlertDialogAction onPress={handleWhatsApp} style={styles.whatsappButton}>
-              <Text className="text-white font-medium">WhatsApp</Text>
-            </AlertDialogAction>
             <AlertDialogAction onPress={handleCall}>
               <Text className="text-white font-medium">Llamar</Text>
             </AlertDialogAction>
             <AlertDialogCancel>
               <Text>Cancelar</Text>
             </AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmSuggestOpen} onOpenChange={setConfirmSuggestOpen}>
+        <AlertDialogContent className="max-w-sm mx-6">
+          <AlertDialogHeader>
+            <AlertDialogTitle style={styles.modalTitle}>Confirmar sugerencia</AlertDialogTitle>
+            <AlertDialogDescription style={styles.modalDescription}>
+              ¿Confirmás enviar tu ubicación actual como sugerencia para este paciente?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>
+              <Text>Cancelar</Text>
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={suggestingLocation || Boolean(prestacion.paciente_tiene_ubicacion_sugerida)}
+              onPress={async () => {
+                setConfirmSuggestOpen(false);
+                await handleSuggestLocation();
+              }}
+            >
+              <Text>Confirmar</Text>
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -490,9 +603,6 @@ const styles = {
   },
   modalCancelButton: {
     width: '100%',
-  },
-  whatsappButton: {
-    backgroundColor: '#16a34a',
   },
   directionsButton: {
     backgroundColor: '#3b82f6',

@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import {
   CheckCircle,
   Clock,
+  Loader2,
   MapPin,
   Phone,
   Wifi,
@@ -17,6 +18,7 @@ import CompletarPrestacionModal from '../../components/CompletarPrestacionModal'
 import {
   AlertDialog,
   AlertDialogAction,
+  AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
@@ -32,6 +34,7 @@ import { Input } from '../../components/ui/input';
 import { Badge } from '../../components/ui/badge';
 import { Separator } from '../../components/ui/separator';
 import { supabase } from '../../lib/supabase';
+import { useLocation } from '../../hooks/useLocation';
 import { useConnectivity } from '../../services/connectivityService';
 import {
   ObtenerPrestacionesMesResult,
@@ -47,6 +50,7 @@ import {
 export default function PrestacionesPage() {
   const insets = useSafeAreaInsets();
   const connectivity = useConnectivity();
+  const { requestLocation } = useLocation();
   const [session, setSession] = useState<Session | null>(null);
   const [prestacionesPendientes, setPrestacionesPendientes] = useState<PrestacionCompleta[]>([]);
   const [prestacionesCompletadas, setPrestacionesCompletadas] = useState<PrestacionCompleta[]>([]);
@@ -70,6 +74,11 @@ export default function PrestacionesPage() {
   const [successMessage, setSuccessMessage] = useState('');
   const [errorModalOpen, setErrorModalOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+
+  const [suggestingLocationId, setSuggestingLocationId] = useState<string | null>(null);
+
+  const [confirmSuggestOpen, setConfirmSuggestOpen] = useState(false);
+  const [prestacionParaSugerir, setPrestacionParaSugerir] = useState<PrestacionCompleta | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -184,6 +193,47 @@ export default function PrestacionesPage() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  };
+
+  const sugerirUbicacion = async (prestacion: PrestacionCompleta) => {
+    try {
+      if (prestacion.paciente_tiene_ubicacion_sugerida) {
+        setErrorMessage('Ya existe una ubicación sugerida pendiente para este paciente. Esperá a que sea revisada.');
+        setErrorModalOpen(true);
+        return;
+      }
+
+      setSuggestingLocationId(prestacion.prestacion_id);
+
+      const ubicacion = await requestLocation();
+      if (!ubicacion) {
+        setErrorMessage('No se pudo obtener tu ubicación. Verificá GPS y permisos.');
+        setErrorModalOpen(true);
+        return;
+      }
+
+      const resultado = await prestacionService.sugerirUbicacionDesdePrestacion(
+        prestacion.prestacion_id,
+        ubicacion.latitude,
+        ubicacion.longitude,
+        typeof ubicacion.accuracy === 'number' ? Math.round(ubicacion.accuracy) : null
+      );
+
+      if (resultado.exito) {
+        setSuccessMessage(resultado.mensaje || 'Sugerencia de ubicación enviada');
+        setSuccessModalOpen(true);
+        await loadPrestaciones(false);
+      } else {
+        setErrorMessage(resultado.mensaje || 'No se pudo enviar la sugerencia de ubicación');
+        setErrorModalOpen(true);
+      }
+    } catch (e) {
+      console.error('Error sugiriendo ubicación (prestaciones):', e);
+      setErrorMessage('No se pudo enviar la sugerencia de ubicación. Intenta nuevamente.');
+      setErrorModalOpen(true);
+    } finally {
+      setSuggestingLocationId(null);
     }
   };
 
@@ -694,6 +744,37 @@ export default function PrestacionesPage() {
                       </Button>
                     )}
                   </View>
+
+                  <View className="flex-row gap-2 items-center mt-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1"
+                      onPress={() => {
+                        setPrestacionParaSugerir(prestacion);
+                        setConfirmSuggestOpen(true);
+                      }}
+                      disabled={
+                        suggestingLocationId === prestacion.prestacion_id ||
+                        Boolean(prestacion.paciente_tiene_ubicacion_sugerida)
+                      }
+                    >
+                      <View className="flex-row items-center gap-2">
+                        {suggestingLocationId === prestacion.prestacion_id ? (
+                          <Loader2 size={14} color="#6b7280" />
+                        ) : (
+                          <MapPin size={14} color="#6b7280" />
+                        )}
+                        <Text className="text-xs">
+                          {suggestingLocationId === prestacion.prestacion_id
+                            ? 'Sugiriendo...'
+                            : prestacion.paciente_tiene_ubicacion_sugerida
+                              ? 'Sugerencia pendiente'
+                              : 'Sugerir ubicación'}
+                        </Text>
+                      </View>
+                    </Button>
+                  </View>
                 </CardContent>
               </Card>
                   );
@@ -823,6 +904,33 @@ export default function PrestacionesPage() {
           <AlertDialogFooter>
             <AlertDialogAction onPress={() => setErrorModalOpen(false)}>
               <Text>OK</Text>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmSuggestOpen} onOpenChange={setConfirmSuggestOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirmar sugerencia</AlertDialogTitle>
+            <AlertDialogDescription>
+              ¿Confirmás enviar tu ubicación actual como sugerencia para este paciente?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>
+              <Text>Cancelar</Text>
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onPress={async () => {
+                if (prestacionParaSugerir) {
+                  setConfirmSuggestOpen(false);
+                  await sugerirUbicacion(prestacionParaSugerir);
+                  setPrestacionParaSugerir(null);
+                }
+              }}
+            >
+              <Text>Confirmar</Text>
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
