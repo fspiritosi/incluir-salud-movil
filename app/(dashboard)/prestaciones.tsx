@@ -36,6 +36,7 @@ import { Separator } from '../../components/ui/separator';
 import { supabase } from '../../lib/supabase';
 import { useLocation } from '../../hooks/useLocation';
 import { useConnectivity } from '../../services/connectivityService';
+import { choferService } from '../../services/choferService';
 import {
   ObtenerPrestacionesMesResult,
   ObtenerPrestacionesRangoResult,
@@ -52,6 +53,7 @@ export default function PrestacionesPage() {
   const connectivity = useConnectivity();
   const { requestLocation } = useLocation();
   const [session, setSession] = useState<Session | null>(null);
+  const [isChoferUser, setIsChoferUser] = useState(false);
   const [prestacionesPendientes, setPrestacionesPendientes] = useState<PrestacionCompleta[]>([]);
   const [prestacionesCompletadas, setPrestacionesCompletadas] = useState<PrestacionCompleta[]>([]);
   const [prestacionesPendientesHoy, setPrestacionesPendientesHoy] = useState<PrestacionCompleta[]>([]);
@@ -100,6 +102,13 @@ export default function PrestacionesPage() {
 
   useEffect(() => {
     if (session) {
+      choferService
+        .isChofer()
+        .then((isC) => {
+          setIsChoferUser(isC);
+          if (isC) router.replace('/(dashboard)/transporte');
+        })
+        .catch(() => setIsChoferUser(false));
       loadPrestaciones();
       checkPrestacionesOffline();
     }
@@ -687,9 +696,11 @@ export default function PrestacionesPage() {
                                 {formatDayAndTime(prestacion.fecha)}
                               </Text>
                             </View>
-                            <Text variant="small" className="font-semibold text-green-600">
-                              {formatCurrency(prestacion.monto)}
-                            </Text>
+                            {!isChoferUser ? (
+                              <Text variant="small" className="font-semibold text-green-600">
+                                {formatCurrency(prestacion.monto)}
+                              </Text>
+                            ) : null}
                           </View>
                         </View>
                       </CardHeader>
@@ -841,9 +852,11 @@ export default function PrestacionesPage() {
                         <CheckCircle size={12} className="text-primary-foreground" />
                         <Text className="text-xs text-primary-foreground font-medium">Completada</Text>
                       </Badge>
-                      <Text variant="small" className="font-semibold text-green-600">
-                        {formatCurrency(prestacion.monto)}
-                      </Text>
+                      {!isChoferUser ? (
+                        <Text variant="small" className="font-semibold text-green-600">
+                          {formatCurrency(prestacion.monto)}
+                        </Text>
+                      ) : null}
                     </View>
                   </View>
                 </CardHeader>

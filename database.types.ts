@@ -120,6 +120,7 @@ export type Database = {
       }
       prestaciones: {
         Row: {
+          chofer_user_id: string | null
           completed_at: string | null
           created_at: string | null
           cronico: boolean | null
@@ -143,6 +144,7 @@ export type Database = {
           user_id: string | null
         }
         Insert: {
+          chofer_user_id?: string | null
           completed_at?: string | null
           created_at?: string | null
           cronico?: boolean | null
@@ -166,6 +168,7 @@ export type Database = {
           user_id?: string | null
         }
         Update: {
+          chofer_user_id?: string | null
           completed_at?: string | null
           created_at?: string | null
           cronico?: boolean | null
@@ -256,6 +259,7 @@ export type Database = {
           },
         ]
       }
+
       profiles: {
         Row: {
           activo: boolean | null
@@ -307,6 +311,32 @@ export type Database = {
         }
         Relationships: []
       }
+
+      transportista_choferes: {
+        Row: {
+          activo: boolean
+          chofer_user_id: string
+          created_at: string
+          transportista_id: string
+          updated_at: string
+        }
+        Insert: {
+          activo?: boolean
+          chofer_user_id: string
+          created_at?: string
+          transportista_id: string
+          updated_at?: string
+        }
+        Update: {
+          activo?: boolean
+          chofer_user_id?: string
+          created_at?: string
+          transportista_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+
       provinces: {
         Row: {
           created_at: string

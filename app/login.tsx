@@ -3,6 +3,7 @@ import { View, ScrollView, Image, TouchableOpacity } from 'react-native';
 import { router } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { Session } from '@supabase/supabase-js';
+import { choferService } from '../services/choferService';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Text } from '../components/ui/text';
@@ -33,14 +34,14 @@ export default function LoginPage() {
         supabase.auth.getSession().then(({ data: { session } }) => {
             setSession(session);
             if (session) {
-                router.replace('/(dashboard)/dashboard');
+                choferService.getLandingRoute().then((path) => router.replace(path));
             }
         });
 
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
             setSession(session);
             if (session) {
-                router.replace('/(dashboard)/dashboard');
+                choferService.getLandingRoute().then((path) => router.replace(path));
             }
         });
 
@@ -50,7 +51,7 @@ export default function LoginPage() {
     // Efecto separado para manejar redirección cuando cambia la sesión
     useEffect(() => {
         if (session) {
-            router.replace('/(dashboard)/dashboard');
+            choferService.getLandingRoute().then((path) => router.replace(path));
         }
     }, [session]);
 
@@ -74,7 +75,7 @@ export default function LoginPage() {
     }
 
     if (session) {
-        router.replace('/(dashboard)/dashboard');
+        choferService.getLandingRoute().then((path) => router.replace(path));
         return null;
     }
 

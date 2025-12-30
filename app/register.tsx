@@ -3,6 +3,7 @@ import { View, ScrollView, Image, TouchableOpacity } from 'react-native';
 import { router } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { Session } from '@supabase/supabase-js';
+import { choferService } from '../services/choferService';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Text } from '../components/ui/text';
@@ -48,7 +49,7 @@ export default function RegisterPage() {
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
             setSession(session);
             if (session) {
-                router.replace('/(dashboard)/dashboard');
+                choferService.getLandingRoute().then((path) => router.replace(path));
             }
         });
 
@@ -108,7 +109,7 @@ export default function RegisterPage() {
     }
 
     if (session) {
-        router.replace('/(dashboard)/dashboard');
+        choferService.getLandingRoute().then((path) => router.replace(path));
         return null;
     }
 

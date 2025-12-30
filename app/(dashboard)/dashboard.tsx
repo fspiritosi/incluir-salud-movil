@@ -11,6 +11,7 @@ import { Text } from '../../components/ui/text';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { supabase } from '../../lib/supabase';
 import { useConnectivity } from '../../services/connectivityService';
+import { choferService } from '../../services/choferService';
 import { PrestacionCompleta, prestacionService } from '../../services/prestacionService';
 import CompletarPrestacionModal from '../../components/CompletarPrestacionModal';
 import moment from 'moment-timezone';
@@ -19,6 +20,7 @@ export default function DashboardPage() {
     const insets = useSafeAreaInsets();
     const connectivity = useConnectivity();
     const [session, setSession] = useState<Session | null>(null);
+    const [isChoferUser, setIsChoferUser] = useState(false);
     const [prestacionesCompletadas, setPrestacionesCompletadas] = useState<PrestacionCompleta[]>([]);
     const [prestacionesPendientes, setPrestacionesPendientes] = useState<PrestacionCompleta[]>([]);
     const [prestacionesPendientesHoy, setPrestacionesPendientesHoy] = useState<PrestacionCompleta[]>([]);
@@ -48,6 +50,18 @@ export default function DashboardPage() {
 
         return () => subscription.unsubscribe();
     }, []);
+
+    useEffect(() => {
+        if (session) {
+            choferService
+                .isChofer()
+                .then((isC) => {
+                    setIsChoferUser(isC);
+                    if (isC) router.replace('/(dashboard)/transporte');
+                })
+                .catch(() => setIsChoferUser(false));
+        }
+    }, [session]);
 
     useEffect(() => {
         if (session) {
@@ -198,6 +212,11 @@ export default function DashboardPage() {
         return null;
     }
 
+    if (isChoferUser) {
+        router.replace('/(dashboard)/transporte');
+        return null;
+    }
+
     const userName = session.user.user_metadata?.full_name ||
         session.user.user_metadata?.first_name ||
         session.user.email?.split('@')[0] ||
@@ -277,15 +296,14 @@ export default function DashboardPage() {
                             {loading ? (
                                 <Skeleton className="w-20 h-6" />
                             ) : (
-                                <Text variant="large" className="font-bold text-green-900">
-                                    {formatCurrency(totalMesCompletadas)}
-                                </Text>
+                                !isChoferUser ? (
+                                    <Text variant="large" className="font-bold text-green-600">
+                                        {formatCurrency(totalMesCompletadas)}
+                                    </Text>
+                                ) : null
                             )}
-                            <Text variant="small" className="text-green-700 mt-1">
-                                Solo completadas
-                            </Text>
-                        </CardContent>
-                    </Card>
+                    </CardContent>
+                </Card>
 
                     {/* Pendientes de Hoy */}
                     <Card className="flex-1 bg-amber-50 border-amber-200">

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, ScrollView, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { supabase, supabaseAdmin } from '../../lib/supabase';
+import { supabase } from '../../lib/supabase';
 import { Session } from '@supabase/supabase-js';
 import { Text } from '../../components/ui/text';
 import { Card, CardContent, CardHeader } from '../../components/ui/card';
@@ -183,47 +183,9 @@ export default function PerfilPage() {
     };
 
     const executeDeleteAccount = async () => {
-        if (!session) return;
-
-        try {
-            setDeletingAccount(true);
-            const userId = session.user.id;
-
-            // 1. Eliminar el usuario usando Admin API (baneando permanentemente)
-            // Baneo permanente (876000 horas = ~100 años, efectivamente permanente)
-            const { error: banError } = await supabaseAdmin.auth.admin.updateUserById(
-                userId,
-                {
-                    ban_duration: '876000h' // Baneo permanente (~100 años)
-                }
-            );
-
-            if (banError) {
-                console.error('Error eliminando cuenta:', banError);
-                throw new Error('No se pudo eliminar la cuenta. Por favor, contacta al soporte.');
-            }
-
-            // 2. Cerrar sesión y redirigir
-            await supabase.auth.signOut();
-            
-            setDeleteAccountConfirmModalOpen(false);
-            setSuccessMessage('Tu cuenta ha sido borrada exitosamente. Ya no podrás iniciar sesión.');
-            setSuccessModalOpen(true);
-            
-            // Redirigir después de un breve delay
-            setTimeout(() => {
-                router.replace('/');
-            }, 2000);
-        } catch (error) {
-            console.error('Error eliminando cuenta:', error);
-            setErrorMessage(
-                error instanceof Error 
-                    ? error.message 
-                    : 'Error al eliminar la cuenta. Por favor, contacta al soporte si el problema persiste.'
-            );
-            setErrorModalOpen(true);
-            setDeletingAccount(false);
-        }
+        setDeleteAccountConfirmModalOpen(false);
+        setInfoMessage('Por seguridad, la eliminación de cuenta debe solicitarse a soporte.');
+        setInfoModalOpen(true);
     };
 
     const checkForUpdates = async () => {

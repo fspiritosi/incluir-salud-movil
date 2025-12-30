@@ -24,6 +24,7 @@ import { Text } from '../../components/ui/text';
 import { supabase } from '../../lib/supabase';
 import { PrestacionCompleta, prestacionService } from '../../services/prestacionService';
 import { useConnectivity } from '../../services/connectivityService';
+import { choferService } from '../../services/choferService';
 
 function isTransporte(p: PrestacionCompleta) {
   return String(p.tipo_prestacion || '').toLowerCase() === 'transporte';
@@ -52,6 +53,9 @@ export default function TransportePage() {
   const insets = useSafeAreaInsets();
   const connectivity = useConnectivity();
   const [session, setSession] = useState<Session | null>(null);
+  const [isTransportista, setIsTransportista] = useState<boolean>(false);
+  const [isChoferUser, setIsChoferUser] = useState<boolean>(false);
+  const [choferLabelById, setChoferLabelById] = useState<Record<string, string>>({});
   const [pendientes, setPendientes] = useState<PrestacionCompleta[]>([]);
   const [completadas, setCompletadas] = useState<PrestacionCompleta[]>([]);
   const [loading, setLoading] = useState(true);
@@ -86,6 +90,28 @@ export default function TransportePage() {
 
   useEffect(() => {
     if (session) {
+      choferService.isChofer().then(setIsChoferUser).catch(() => setIsChoferUser(false));
+      choferService
+        .isTransportista()
+        .then(async (isT) => {
+          setIsTransportista(isT);
+          if (isT) {
+            try {
+              const choferes = await choferService.listChoferes();
+              const map: Record<string, string> = {};
+              for (const c of choferes) {
+                const name = `${c.apellido ?? ''}${c.apellido && c.nombre ? ', ' : ''}${c.nombre ?? ''}`.trim();
+                map[c.userId] = `${name || 'Sin nombre'}${c.dni ? ` (DNI ${c.dni})` : ''}`;
+              }
+              setChoferLabelById(map);
+            } catch {
+              setChoferLabelById({});
+            }
+          } else {
+            setChoferLabelById({});
+          }
+        })
+        .catch(() => setIsTransportista(false));
       loadData(false);
     }
   }, [session]);
@@ -93,12 +119,35 @@ export default function TransportePage() {
   const loadData = async (forceRefresh: boolean) => {
     try {
       setLoading(true);
-      const resultado = await prestacionService.obtenerPrestacionesUltimaSemana(undefined, forceRefresh);
-      const pendientesTransporte = (resultado.pendientes || []).filter(isTransporte);
-      const completadasTransporte = (resultado.completadas || []).filter(isTransporte);
+      const isChofer = await choferService.isChofer();
+      if (isChofer) {
+        const choferId = session?.user?.id;
+        if (!choferId) {
+          setPendientes([]);
+          setCompletadas([]);
+          return;
+        }
 
-      setPendientes(pendientesTransporte.filter((p) => p.estado === 'pendiente' || p.estado === 'en_proceso'));
-      setCompletadas(completadasTransporte.filter((p) => p.estado === 'completada'));
+        const ahora = moment.tz('America/Argentina/Buenos_Aires');
+        const inicioMes = ahora.clone().startOf('month').toDate();
+        const finMes = ahora.clone().endOf('month').toDate();
+
+        const resultado = await prestacionService.obtenerViajesTransporteChoferPorRango(
+          choferId,
+          inicioMes,
+          finMes
+        );
+
+        setPendientes((resultado.pendientes || []).filter((p) => p.estado === 'pendiente' || p.estado === 'en_proceso'));
+        setCompletadas((resultado.completadas || []).filter((p) => p.estado === 'completada'));
+      } else {
+        const resultado = await prestacionService.obtenerPrestacionesUltimaSemana(undefined, forceRefresh);
+        const pendientesTransporte = (resultado.pendientes || []).filter(isTransporte);
+        const completadasTransporte = (resultado.completadas || []).filter(isTransporte);
+
+        setPendientes(pendientesTransporte.filter((p) => p.estado === 'pendiente' || p.estado === 'en_proceso'));
+        setCompletadas(completadasTransporte.filter((p) => p.estado === 'completada'));
+      }
     } catch (e) {
       console.error('Error loading transporte prestaciones:', e);
       setErrorMessage('No se pudieron cargar las prestaciones de transporte');
@@ -284,6 +333,17 @@ export default function TransportePage() {
             Validá traslados pendientes (ida / vuelta)
           </Text>
 
+          {isTransportista && !isChoferUser ? (
+            <View className="mt-4 flex-row gap-2">
+              <Button variant="outline" size="sm" className="flex-1" onPress={() => router.push('/(dashboard)/choferes')}>
+                <Text className="text-xs">Choferes</Text>
+              </Button>
+              <Button variant="outline" size="sm" className="flex-1" onPress={() => router.push('/(dashboard)/asignar-transporte')}>
+                <Text className="text-xs">Asignar viajes</Text>
+              </Button>
+            </View>
+          ) : null}
+
           {!loading && pendientes.length > 0 ? (
             <View className="mt-3">
               <Badge variant="default" className="bg-amber-500 self-start">
@@ -314,6 +374,8 @@ export default function TransportePage() {
           ) : (
             pendientesOrdenadas.map((p) => {
               const sentidoLabel = formatSentido(p.sentido_transporte);
+              const choferUserId = (p as any).chofer_user_id as string | null | undefined;
+              const assignedLabel = choferUserId ? choferLabelById[choferUserId] : null;
               return (
                 <Card
                   key={p.prestacion_id}
@@ -325,6 +387,13 @@ export default function TransportePage() {
                         <Text variant="large" className="font-semibold">{p.paciente_nombre}</Text>
                         {sentidoLabel ? (
                           <Text variant="small" className="text-muted-foreground font-medium">{sentidoLabel}</Text>
+                        ) : null}
+                        {isTransportista && assignedLabel ? (
+                          <View className="mt-2 self-start">
+                            <Badge variant="default" className="bg-blue-600">
+                              <Text className="text-white text-xs font-semibold">Chofer: {assignedLabel}</Text>
+                            </Badge>
+                          </View>
                         ) : null}
                       </View>
                       <View className="items-end gap-1">
@@ -452,6 +521,8 @@ export default function TransportePage() {
             <View className="mt-3">
               {completadasOrdenadas.map((p) => {
                 const sentidoLabel = formatSentido(p.sentido_transporte);
+                const choferUserId = (p as any).chofer_user_id as string | null | undefined;
+                const assignedLabel = choferUserId ? choferLabelById[choferUserId] : null;
                 return (
                   <Card key={p.prestacion_id} className="mb-3">
                     <CardHeader className="pb-3">
@@ -460,6 +531,13 @@ export default function TransportePage() {
                           <Text variant="large" className="font-semibold">{p.paciente_nombre}</Text>
                           {sentidoLabel ? (
                             <Text variant="small" className="text-muted-foreground font-medium">{sentidoLabel}</Text>
+                          ) : null}
+                          {isTransportista && assignedLabel ? (
+                            <View className="mt-2 self-start">
+                              <Badge variant="default" className="bg-blue-600">
+                                <Text className="text-white text-xs font-semibold">Chofer: {assignedLabel}</Text>
+                              </Badge>
+                            </View>
                           ) : null}
                         </View>
                         <View className="items-end gap-1">

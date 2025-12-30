@@ -62,6 +62,7 @@ export interface PrestacionCompleta {
   obra_social: string;
   estado: 'pendiente' | 'completada' | 'cancelada' | 'en_proceso';
   tipo_prestacion: string;
+  chofer_user_id?: string | null;
   sentido_transporte?: string;
   centro_id?: string;
   centro_nombre?: string;
@@ -453,6 +454,71 @@ class PrestacionService {
     return this.obtenerPrestacionesPorRango(hace7Dias, finHoy, userId);
   }
 
+  async obtenerViajesTransporteChoferPorRango(
+    choferUserId: string,
+    fechaInicio: Date,
+    fechaFin: Date
+  ): Promise<{
+    pendientes: PrestacionCompleta[];
+    completadas: PrestacionCompleta[];
+    isFromCache: boolean;
+    isOffline: boolean;
+  }> {
+    const isOnline = await connectivityService.isOnline();
+    if (!isOnline) {
+      throw new Error('Sin conexión: el listado de viajes asignados requiere internet.');
+    }
+
+    const inicioArgentina = moment(fechaInicio).tz(this.TIMEZONE).startOf('day');
+    const finArgentina = moment(fechaFin).tz(this.TIMEZONE).endOf('day');
+
+    const inicioUTC = inicioArgentina.clone().utc().toISOString();
+    const finUTC = finArgentina.clone().utc().toISOString();
+
+    const { data: prestaciones, error } = await supabase.rpc('obtener_viajes_transporte_chofer', {
+      p_chofer_id: choferUserId,
+      p_fecha_inicio: inicioUTC,
+      p_fecha_fin: finUTC,
+    });
+
+    if (error) throw error;
+
+    const prestacionesCompletas: PrestacionCompleta[] = (prestaciones || []).map((p: any) => {
+      return {
+        prestacion_id: p.id,
+        descripcion: p.descripcion || `${p.tipo_prestacion} - ${p.paciente_nombre} ${p.paciente_apellido}`,
+        fecha: p.fecha,
+        monto: p.monto,
+        paciente_nombre: `${p.paciente_nombre} ${p.paciente_apellido}`,
+        paciente_direccion: p.paciente_direccion_completa,
+        paciente_telefono: p.paciente_telefono,
+        ubicacion_paciente_lat: p.paciente_lat || 0,
+        ubicacion_paciente_lng: p.paciente_lng || 0,
+        paciente_tiene_ubicacion_sugerida: Boolean(p.paciente_tiene_ubicacion_sugerida),
+        obra_social: p.obra_social_nombre || 'Sin obra social',
+        estado: p.estado,
+        tipo_prestacion: p.tipo_prestacion,
+        chofer_user_id: p.chofer_user_id ?? null,
+        sentido_transporte: p.sentido_transporte || undefined,
+        centro_id: p.centro_id || undefined,
+        centro_nombre: p.centro_nombre || undefined,
+        centro_direccion: p.centro_direccion_completa || undefined,
+        centro_lat: typeof p.centro_lat === 'number' ? p.centro_lat : undefined,
+        centro_lng: typeof p.centro_lng === 'number' ? p.centro_lng : undefined,
+        centro_radio_metros: typeof p.centro_radio_metros === 'number' ? p.centro_radio_metros : undefined,
+        centro_tiene_ubicacion_sugerida: Boolean(p.centro_tiene_ubicacion_sugerida),
+        started_at: p.started_at || undefined,
+        notas: p.notas || undefined,
+        paciente_id: p.paciente_id,
+      };
+    });
+
+    const pendientes = prestacionesCompletas.filter((p) => p.estado === 'pendiente' || p.estado === 'en_proceso');
+    const completadas = prestacionesCompletas.filter((p) => p.estado === 'completada');
+
+    return { pendientes, completadas, isFromCache: false, isOffline: false };
+  }
+
   // Obtener prestaciones del día actual con sistema de cache inteligente
   async obtenerPrestacionesDelDia(userId?: string, forceRefresh: boolean = false): Promise<{
     pendientes: PrestacionCompleta[];
@@ -529,6 +595,7 @@ class PrestacionService {
           obra_social: p.obra_social_nombre || 'Sin obra social',
           estado: p.estado,
           tipo_prestacion: p.tipo_prestacion,
+          chofer_user_id: p.chofer_user_id ?? null,
           sentido_transporte: p.sentido_transporte || undefined,
           centro_id: p.centro_id || undefined,
           centro_nombre: p.centro_nombre || undefined,
@@ -1084,6 +1151,7 @@ class PrestacionService {
           obra_social: p.obra_social_nombre || 'Sin obra social',
           estado: p.estado,
           tipo_prestacion: p.tipo_prestacion,
+          chofer_user_id: p.chofer_user_id ?? null,
           sentido_transporte: p.sentido_transporte || undefined,
           centro_id: p.centro_id || undefined,
           centro_nombre: p.centro_nombre || undefined,
