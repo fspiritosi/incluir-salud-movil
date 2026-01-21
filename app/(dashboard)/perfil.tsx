@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { View, ScrollView, Platform } from 'react-native';
+import { View, ScrollView, Platform, ActivityIndicator, RefreshControl } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import { Session } from '@supabase/supabase-js';
@@ -21,7 +22,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '../../components/ui/alert-dialog';
-import { User, Mail, Lock, LogOut, RefreshCw, CheckCircle, DollarSign, Trash2, AlertTriangle } from 'lucide-react-native';
+import { User, Mail, Lock, LogOut, RefreshCw, CheckCircle, DollarSign, Trash2, AlertTriangle, Camera } from 'lucide-react-native';
 import * as Updates from 'expo-updates';
 import { prestacionService } from '../../services/prestacionService';
 import moment from 'moment-timezone';
@@ -49,12 +50,14 @@ export default function PerfilPage() {
     const [avatarUrl, setAvatarUrl] = useState('');
     const [updateStatus, setUpdateStatus] = useState('');
     const [tipoPrestador, setTipoPrestador] = useState<string | null>(null);
+    const [uploadingAvatar, setUploadingAvatar] = useState(false);
     const [estadisticas, setEstadisticas] = useState<{
         totalCompletadas: number;
         promedioMensual: number;
         montoTotal: number;
     } | null>(null);
     const [cargandoEstadisticas, setCargandoEstadisticas] = useState(false);
+    const [refreshing, setRefreshing] = useState(false);
 
     useEffect(() => {
         supabase.auth.getSession().then(({ data: { session } }) => {
@@ -77,6 +80,23 @@ export default function PerfilPage() {
 
         return () => subscription.unsubscribe();
     }, []);
+
+    const onRefresh = async () => {
+        if (!session) return;
+        setRefreshing(true);
+        try {
+            // Recargar sesión para obtener metadata actualizada
+            const { data: { session: newSession } } = await supabase.auth.refreshSession();
+            if (newSession) {
+                setSession(newSession);
+                await loadProfile(newSession);
+            }
+        } catch (error) {
+            console.error('Error refrescando perfil:', error);
+        } finally {
+            setRefreshing(false);
+        }
+    };
 
     const loadProfile = async (session: Session) => {
         const metadata = session.user.user_metadata || {};
@@ -126,6 +146,96 @@ export default function PerfilPage() {
             console.error('Error cargando estadísticas:', error);
         } finally {
             setCargandoEstadisticas(false);
+        }
+    };
+
+    const pickAndUploadAvatar = async () => {
+        if (!session) return;
+
+        try {
+            // Solicitar permisos
+            const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+            if (status !== 'granted') {
+                setErrorMessage('Se necesitan permisos para acceder a la galería');
+                setErrorModalOpen(true);
+                return;
+            }
+
+            // Abrir selector de imagen
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ['images'],
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.7,
+            });
+
+            if (result.canceled || !result.assets || result.assets.length === 0) {
+                return;
+            }
+
+            setUploadingAvatar(true);
+
+            const image = result.assets[0];
+            const userId = session.user.id;
+            const fileExt = image.uri.split('.').pop()?.toLowerCase() || 'jpg';
+            const fileName = `${userId}.${fileExt}`;
+            const filePath = `${fileName}`;
+
+            // Leer el archivo como base64
+            const response = await fetch(image.uri);
+            const blob = await response.blob();
+
+            // Convertir blob a ArrayBuffer
+            const arrayBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as ArrayBuffer);
+                reader.onerror = reject;
+                reader.readAsArrayBuffer(blob);
+            });
+
+            // Subir a Supabase Storage
+            const { error: uploadError } = await supabase.storage
+                .from('avatars')
+                .upload(filePath, arrayBuffer, {
+                    contentType: image.mimeType || 'image/jpeg',
+                    upsert: true,
+                });
+
+            if (uploadError) {
+                throw uploadError;
+            }
+
+            // Obtener URL pública
+            const { data: urlData } = supabase.storage
+                .from('avatars')
+                .getPublicUrl(filePath);
+
+            const publicUrl = `${urlData.publicUrl}?t=${Date.now()}`;
+
+            // Actualizar metadata del usuario
+            const { error: updateError } = await supabase.auth.updateUser({
+                data: { avatar_url: publicUrl }
+            });
+
+            if (updateError) {
+                throw updateError;
+            }
+
+            // Actualizar estado local
+            setAvatarUrl(publicUrl);
+            setSuccessMessage('Foto de perfil actualizada correctamente');
+            setSuccessModalOpen(true);
+
+        } catch (error) {
+            console.error('Error subiendo avatar:', error);
+            if (error instanceof Error) {
+                setErrorMessage(`Error al subir la foto: ${error.message}`);
+            } else {
+                setErrorMessage('Error al subir la foto de perfil');
+            }
+            setErrorModalOpen(true);
+        } finally {
+            setUploadingAvatar(false);
         }
     };
 
@@ -224,6 +334,14 @@ export default function PerfilPage() {
             contentContainerStyle={{
                 paddingBottom: Platform.OS === 'android' ? 70 + Math.max(insets.bottom, 0) + 20 : 90
             }}
+            refreshControl={
+                <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={onRefresh}
+                    colors={['#3b82f6']}
+                    tintColor="#3b82f6"
+                />
+            }
         >
             {/* Header */}
             <View className="p-6 pt-16 bg-card">
@@ -264,15 +382,19 @@ export default function PerfilPage() {
                         <Button 
                             variant="outline" 
                             size="sm"
-                            onPress={() => {
-                                setInfoMessage('La función de cambiar foto estará disponible pronto');
-                                setInfoModalOpen(true);
-                            }}
+                            onPress={pickAndUploadAvatar}
+                            disabled={uploadingAvatar}
                             className="mt-2"
                         >
                             <View className="flex-row items-center gap-2">
-                                <User size={16} className="text-muted-foreground" />
-                                <Text className="text-sm">Cambiar Foto</Text>
+                                {uploadingAvatar ? (
+                                    <ActivityIndicator size="small" color="#6b7280" />
+                                ) : (
+                                    <Camera size={16} className="text-muted-foreground" />
+                                )}
+                                <Text className="text-sm">
+                                    {uploadingAvatar ? 'Subiendo...' : 'Cambiar Foto'}
+                                </Text>
                             </View>
                         </Button>
                     </View>
