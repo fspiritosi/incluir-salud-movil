@@ -26,12 +26,22 @@ import {
 } from '../components/ui/alert-dialog';
 
 
+type TipoPrestadorValue = 'acompanante_terapeutico' | 'kinesiologia' | 'transporte';
+type TipoPrestadorOption = { value: TipoPrestadorValue; label: string };
+
+const TIPO_PRESTADOR_OPTIONS: TipoPrestadorOption[] = [
+    { value: 'acompanante_terapeutico', label: 'Acompañante Terapéutico' },
+    { value: 'kinesiologia', label: 'Kinesiología' },
+    { value: 'transporte', label: 'Transporte' }
+];
+
 export default function RegisterPage() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+    const [tipoPrestador, setTipoPrestador] = useState<TipoPrestadorOption>(TIPO_PRESTADOR_OPTIONS[0]);
 
     // Estados para modales
     const [errorModalOpen, setErrorModalOpen] = useState(false);
@@ -79,7 +89,7 @@ export default function RegisterPage() {
             options: {
                 data: {
                     role: 'client',
-                    tipo_prestador: 'acompanante_terapeutico'
+                    tipo_prestador: tipoPrestador.value
                 }
             }
         });
@@ -89,7 +99,7 @@ export default function RegisterPage() {
             const { error: profileError,data } = await supabase
                 .from('profiles')
                 .update({
-                    tipo_prestador: 'acompanante_terapeutico'
+                    tipo_prestador: tipoPrestador.value
                 })
                 .eq('id', session.user.id).select();
 
@@ -196,14 +206,24 @@ export default function RegisterPage() {
                         <View className="mb-4">
                             <Text variant="small" className="mb-2">Tipo de Prestador</Text>
                             <Select
-                                value={{ value: 'acompanante_terapeutico', label: 'Acompañante Terapéutico' }}
-                                disabled={true}
+                                value={tipoPrestador}
+                                onValueChange={(option) => {
+                                    if (option) {
+                                        setTipoPrestador(option as TipoPrestadorOption);
+                                    }
+                                }}
                             >
                                 <SelectTrigger>
-                                    <SelectValue placeholder="Acompañante Terapéutico" />
+                                    <SelectValue placeholder="Seleccioná tu especialidad" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem label="Acompañante Terapéutico" value="acompanante_terapeutico" />
+                                    {TIPO_PRESTADOR_OPTIONS.map((option) => (
+                                        <SelectItem
+                                            key={option.value}
+                                            label={option.label}
+                                            value={option.value}
+                                        />
+                                    ))}
                                 </SelectContent>
                             </Select>
                         </View>

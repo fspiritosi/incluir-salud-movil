@@ -432,6 +432,26 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
       </Dialog>
 
       {/* Modal de Éxito */}
+      <AlertDialog open={successModalOpen} onOpenChange={setSuccessModalOpen}>
+        <AlertDialogContent className="max-w-sm mx-6">
+          <AlertDialogHeader>
+            <View style={styles.modalIconContainer}>
+              <CheckCircle2 size={48} color="#10b981" />
+              <AlertDialogTitle style={styles.modalTitle}>¡Prestación Completada!</AlertDialogTitle>
+            </View>
+            <AlertDialogDescription style={styles.modalDescription}>
+              {successMessage}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onPress={handleSuccessClose}>
+              <Text className="text-white font-medium">Aceptar</Text>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Modal de Error */}
       <AlertDialog open={errorModalOpen} onOpenChange={setErrorModalOpen}>
         <AlertDialogContent className="max-w-sm mx-6">
           <AlertDialogHeader>

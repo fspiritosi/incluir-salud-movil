@@ -656,21 +656,40 @@ class PrestacionService {
         throw new Error('Prestación no encontrada en cache');
       }
 
+      let targetLat: number;
+      let targetLng: number;
+      let radioEfectivo = radioPermitido;
+      let ubicacionDescripcion = 'paciente';
+
+      // Si la prestación tiene centro asignado con ubicación, validar contra el centro
+      if (prestacion.centro_id && 
+          typeof prestacion.centro_lat === 'number' && 
+          typeof prestacion.centro_lng === 'number') {
+        targetLat = prestacion.centro_lat;
+        targetLng = prestacion.centro_lng;
+        radioEfectivo = prestacion.centro_radio_metros || radioPermitido;
+        ubicacionDescripcion = prestacion.centro_nombre || 'centro';
+      } else {
+        // Validar contra la ubicación del paciente
+        targetLat = prestacion.ubicacion_paciente_lat;
+        targetLng = prestacion.ubicacion_paciente_lng;
+      }
+
       // Calcular distancia
       const distancia = this.calcularDistancia(
         ubicacionLat,
         ubicacionLng,
-        prestacion.ubicacion_paciente_lat,
-        prestacion.ubicacion_paciente_lng
+        targetLat,
+        targetLng
       );
 
-      const dentroDelRango = distancia <= radioPermitido;
+      const dentroDelRango = distancia <= radioEfectivo;
 
       return {
         exito: dentroDelRango,
         mensaje: dentroDelRango
           ? 'Prestación completada offline - se sincronizará automáticamente'
-          : `Estás muy lejos del lugar de la prestación. Distancia actual: ${Math.round(distancia)}m (máximo permitido: ${radioPermitido}m)`,
+          : `Estás muy lejos del ${ubicacionDescripcion}. Distancia actual: ${Math.round(distancia)}m (máximo permitido: ${radioEfectivo}m)`,
         distancia_metros: distancia,
         prestacion_actualizada: dentroDelRango ? {
           id: prestacionId,
@@ -1207,6 +1226,136 @@ class PrestacionService {
 
     return this.obtenerPrestacionesPorRango(inicioMes, finMes, userId);
   }
+
+  // ==================== VALIDACIÓN GRUPAL EN CENTROS ====================
+
+  // Obtener prestaciones pendientes de un centro para el usuario actual
+  async obtenerPrestacionesPendientesCentro(centroId: string): Promise<{
+    prestaciones: Array<{
+      prestacion_id: string;
+      paciente_id: string;
+      paciente_nombre: string;
+      paciente_apellido: string;
+      fecha: string;
+      estado: string;
+      tipo_prestacion: string;
+    }>;
+    error?: string;
+  }> {
+    try {
+      const { data, error } = await supabase.rpc('obtener_prestaciones_pendientes_centro', {
+        p_centro_id: centroId
+      });
+
+      if (error) {
+        console.error('Error obteniendo prestaciones del centro:', error);
+        return { prestaciones: [], error: error.message };
+      }
+
+      return { prestaciones: data || [] };
+    } catch (error: any) {
+      console.error('Error obteniendo prestaciones del centro:', error);
+      return { prestaciones: [], error: error?.message || 'Error desconocido' };
+    }
+  }
+
+  // Validar múltiples prestaciones de un centro con una sola geolocalización
+  async validarPrestacionesCentro(
+    prestacionIds: string[],
+    ubicacionLat: number,
+    ubicacionLng: number,
+    radioPermitidoMetros: number = 100
+  ): Promise<{
+    exito: boolean;
+    mensaje: string;
+    prestaciones_validadas?: number;
+    distancia_metros?: number;
+    centro_id?: string;
+  }> {
+    try {
+      const isOnline = await connectivityService.isOnline();
+
+      if (!isOnline) {
+        return {
+          exito: false,
+          mensaje: 'La validación grupal requiere conexión a internet'
+        };
+      }
+
+      console.log('📍 Validando prestaciones centro con:', {
+        prestacionIds,
+        ubicacionLat,
+        ubicacionLng,
+        radioPermitidoMetros
+      });
+
+      const { data, error } = await supabase.rpc('validar_prestaciones_centro', {
+        p_prestacion_ids: prestacionIds,
+        p_ubicacion_lat: ubicacionLat,
+        p_ubicacion_lng: ubicacionLng,
+        p_radio_permitido_metros: radioPermitidoMetros
+      });
+
+      console.log('📍 Resultado validación centro:', data);
+
+      if (error) {
+        console.error('Error validando prestaciones del centro:', error);
+        return {
+          exito: false,
+          mensaje: error.message || 'Error al validar prestaciones'
+        };
+      }
+
+      // Actualizar cache después de validación exitosa
+      if (data?.exito) {
+        await this.obtenerPrestacionesDelDia(undefined, true);
+      }
+
+      return data;
+    } catch (error: any) {
+      console.error('Error validando prestaciones del centro:', error);
+      return {
+        exito: false,
+        mensaje: error?.message || 'Error desconocido'
+      };
+    }
+  }
+
+  // Obtener centros con prestaciones pendientes para el día actual
+  async obtenerCentrosConPrestacionesPendientes(): Promise<Array<{
+    centro_id: string;
+    centro_nombre: string;
+    prestaciones_pendientes: number;
+  }>> {
+    try {
+      const { pendientes } = await this.obtenerPrestacionesDelDia();
+
+      // Agrupar por centro
+      const centrosMap = new Map<string, { nombre: string; count: number }>();
+
+      for (const p of pendientes) {
+        if (p.centro_id && p.centro_nombre) {
+          const existing = centrosMap.get(p.centro_id);
+          if (existing) {
+            existing.count++;
+          } else {
+            centrosMap.set(p.centro_id, { nombre: p.centro_nombre, count: 1 });
+          }
+        }
+      }
+
+      return Array.from(centrosMap.entries()).map(([id, { nombre, count }]) => ({
+        centro_id: id,
+        centro_nombre: nombre,
+        prestaciones_pendientes: count
+      }));
+    } catch (error) {
+      console.error('Error obteniendo centros con prestaciones:', error);
+      return [];
+    }
+  }
+
+  // ==================== FIN VALIDACIÓN GRUPAL ====================
 
   // Obtener prestaciones pendientes del día anterior (programadas para ayer pero no completadas)
   // Nota: Estas prestaciones aún pueden completarse ya que tienen hasta 1 semana desde la fecha programada

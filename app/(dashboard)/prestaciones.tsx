@@ -15,6 +15,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { Linking, Platform, RefreshControl, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import CompletarPrestacionModal from '../../components/CompletarPrestacionModal';
+import CentrosConPrestaciones from '../../components/CentrosConPrestaciones';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -580,9 +581,14 @@ export default function PrestacionesPage() {
 
 
 
+        {/* Centros con Prestaciones Pendientes - Solo muestra si hay centros */}
+        <View className="mx-6 mt-4">
+          <CentrosConPrestaciones refreshTrigger={refreshing ? 1 : 0} />
+        </View>
+
         {/* Prestaciones Offline */}
         {prestacionesOffline > 0 && (
-          <Card className="mx-6 mb-3 mt-4 border-amber-500 bg-amber-50">
+          <Card className="mx-6 mb-3 border-amber-500 bg-amber-50">
             <CardContent className="flex-row items-center gap-3 p-4">
               <WifiOff size={20} className="text-amber-600" />
               <View className="flex-1">
@@ -670,31 +676,31 @@ export default function PrestacionesPage() {
                       className={`mb-3 ${isPrestacionVencida(prestacion.fecha) ? 'border-amber-500 bg-amber-50' : ''}`}
                     >
                       <CardHeader className="pb-3">
-                        <View className="flex-row justify-between items-start">
-                          <View className="flex-1">
-                            <View className="flex-row items-center gap-2 mb-1">
-                              <Text variant="large" className="font-semibold">
-                                {prestacion.tipo_prestacion.charAt(0).toUpperCase() + prestacion.tipo_prestacion.slice(1)}
-                              </Text>
-                              {urgencia && (
-                                <Badge className={urgencia.color}>
-                                  <Text variant="small" className="font-semibold">
-                                    {urgencia.label}
-                                  </Text>
-                                </Badge>
-                              )}
-                            </View>
+                        <View className="flex-row justify-between items-start gap-2">
+                          <View className="flex-1 flex-shrink">
+                            <Text variant="large" className="font-semibold" numberOfLines={2}>
+                              {prestacion.tipo_prestacion.charAt(0).toUpperCase() + prestacion.tipo_prestacion.slice(1)}
+                            </Text>
                             <Text variant="small" className="text-muted-foreground font-medium">
                               {prestacion.paciente_nombre}
                             </Text>
                           </View>
 
-                          <View className="items-end gap-1">
-                            <View className="flex-row items-center gap-1">
-                              <Clock size={14} className="text-muted-foreground" />
-                              <Text variant="small" className="text-muted-foreground">
-                                {formatDayAndTime(prestacion.fecha)}
-                              </Text>
+                          <View className="items-end flex-shrink-0">
+                            <View className="flex-row items-center gap-2 mb-1 flex-wrap justify-end">
+                              {urgencia && (
+                                <Badge className={`${urgencia.color}`}>
+                                  <Text variant="small" className="font-semibold">
+                                    {urgencia.label}
+                                  </Text>
+                                </Badge>
+                              )}
+                              <View className="flex-row items-center gap-1">
+                                <Clock size={14} className="text-muted-foreground" />
+                                <Text variant="small" className="text-muted-foreground">
+                                  {formatDayAndTime(prestacion.fecha)}
+                                </Text>
+                              </View>
                             </View>
                             {!isChoferUser ? (
                               <Text variant="small" className="font-semibold text-green-600">
@@ -848,6 +854,12 @@ export default function PrestacionesPage() {
                     </View>
 
                     <View className="items-end gap-2">
+                      <View className="flex-row items-center gap-1">
+                        <Clock size={14} className="text-muted-foreground" />
+                        <Text variant="small" className="text-muted-foreground">
+                          {formatDayAndTime(prestacion.fecha)}
+                        </Text>
+                      </View>
                       <Badge variant="default" className="flex-row items-center gap-1">
                         <CheckCircle size={12} className="text-primary-foreground" />
                         <Text className="text-xs text-primary-foreground font-medium">Completada</Text>
@@ -872,7 +884,6 @@ export default function PrestacionesPage() {
                       {prestacion.paciente_direccion}
                     </Text>
                   </View>
-
                 </CardContent>
               </Card>
             )))}

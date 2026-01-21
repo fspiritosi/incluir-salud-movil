@@ -5,24 +5,33 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import React, { useEffect, useState } from 'react';
 import { choferService } from '../../services/choferService';
 
+type DashboardMode = 'unknown' | 'transporte' | 'prestaciones';
+
 export default function DashboardLayout() {
   const insets = useSafeAreaInsets();
-  const [role, setRole] = useState<'unknown' | 'chofer' | 'transportista' | 'other'>('unknown');
+  const [mode, setMode] = useState<DashboardMode>('unknown');
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
-        const [isC, isT] = await Promise.all([
+        const [isChofer, isTransportista, isPrestadorNoTransporte] = await Promise.all([
           choferService.isChofer(),
           choferService.isTransportista(),
+          choferService.isPrestadorNoTransporte(),
         ]);
         if (!mounted) return;
-        if (isC) setRole('chofer');
-        else if (isT) setRole('transportista');
-        else setRole('other');
+
+        if (isChofer || isTransportista) {
+          setMode('transporte');
+        } else if (isPrestadorNoTransporte) {
+          setMode('prestaciones');
+        } else {
+          // Usuarios administrativos o sin tipo: muestran vista general con prestaciones
+          setMode('prestaciones');
+        }
       } catch {
-        if (mounted) setRole('other');
+        if (mounted) setMode('prestaciones');
       }
     })();
     return () => {
@@ -30,13 +39,17 @@ export default function DashboardLayout() {
     };
   }, []);
 
-  if (role === 'unknown') {
+  if (mode === 'unknown') {
     return null;
   }
 
+  const showTransportTab = mode === 'transporte';
+  const showPrestacionesTab = mode !== 'transporte';
+  const showDashboardTab = true; // ahora todos los usuarios ven Inicio
+
   return (
     <Tabs
-      initialRouteName={role === 'chofer' ? 'transporte' : 'dashboard'}
+      initialRouteName={showTransportTab ? 'transporte' : 'dashboard'}
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
@@ -61,7 +74,7 @@ export default function DashboardLayout() {
         name="dashboard"
         options={{
           title: 'Inicio',
-          href: role === 'chofer' ? null : undefined,
+          href: showDashboardTab ? undefined : null,
           tabBarIcon: ({ color, size }) => (
             <Home size={size} color={color} />
           ),
@@ -71,7 +84,7 @@ export default function DashboardLayout() {
         name="prestaciones"
         options={{
           title: 'Prestaciones',
-          href: role === 'chofer' ? null : undefined,
+          href: showPrestacionesTab ? undefined : null,
           tabBarIcon: ({ color, size }) => (
             <FileText size={size} color={color} />
           ),
@@ -81,6 +94,7 @@ export default function DashboardLayout() {
         name="transporte"
         options={{
           title: 'Transporte',
+          href: showTransportTab ? undefined : null,
           tabBarIcon: ({ color, size }) => (
             <Truck size={size} color={color} />
           ),
@@ -90,7 +104,6 @@ export default function DashboardLayout() {
         name="reportes"
         options={{
           title: 'Reportes',
-          href: role === 'chofer' ? null : undefined,
           tabBarIcon: ({ color, size }) => (
             <BarChart3 size={size} color={color} />
           ),
@@ -116,6 +129,13 @@ export default function DashboardLayout() {
         name="asignar-transporte"
         options={{
           title: 'Asignar Transporte',
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="validar-centro"
+        options={{
+          title: 'Validar Centro',
           href: null,
         }}
       />

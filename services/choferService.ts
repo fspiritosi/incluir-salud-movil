@@ -95,38 +95,31 @@ export const choferService = {
   },
 
   async isTransportista(): Promise<boolean> {
-    const [roles, tipoUsuario, email] = await Promise.all([
-      this.getCurrentRoles(),
-      this.getCurrentTipoUsuario(),
-      this.getCurrentEmail(),
-    ]);
     const tipoPrestador = await this.getCurrentTipoPrestador();
-
-    const isChoferByIdentity =
-      roles.includes('chofer') ||
-      tipoUsuario === 'chofer' ||
-      (typeof email === 'string' && /^chofer\.\d{8}@incluir\.local$/i.test(email));
-
-    if (isChoferByIdentity) return false;
-
-    return (
-      roles.includes('transportista') ||
-      tipoUsuario === 'transportista' ||
-      tipoPrestador === 'transporte' ||
-      roles.includes('transporte') ||
-      roles.includes('super_admin')
-    );
+    // Solo es transportista si tiene tipo_prestador = 'transporte'
+    return tipoPrestador === 'transporte';
   },
 
   async isChofer(): Promise<boolean> {
-    const [roles, tipoUsuario, email] = await Promise.all([
-      this.getCurrentRoles(),
+    const [tipoUsuario, email] = await Promise.all([
       this.getCurrentTipoUsuario(),
       this.getCurrentEmail(),
     ]);
-    if (roles.includes('chofer') || tipoUsuario === 'chofer') return true;
+    // Es chofer si tipo_usuario = 'chofer' o tiene email de chofer
+    if (tipoUsuario === 'chofer') return true;
     if (typeof email === 'string' && /^chofer\.\d{8}@incluir\.local$/i.test(email)) return true;
     return false;
+  },
+
+  // Verifica si es prestador NO transportista (AT, etc.) - debe ver pestaña Prestaciones
+  async isPrestadorNoTransporte(): Promise<boolean> {
+    const [tipoUsuario, tipoPrestador] = await Promise.all([
+      this.getCurrentTipoUsuario(),
+      this.getCurrentTipoPrestador(),
+    ]);
+    
+    // Es prestador pero NO de transporte
+    return tipoUsuario === 'prestador' && tipoPrestador !== 'transporte';
   },
 
   async getLandingRoute(): Promise<'/(dashboard)/dashboard' | '/(dashboard)/transporte'> {
