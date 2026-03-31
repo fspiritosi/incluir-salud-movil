@@ -25,7 +25,6 @@ import {
     AlertDialogTitle,
 } from '../components/ui/alert-dialog';
 
-
 type TipoPrestadorValue = 'acompanante_terapeutico' | 'kinesiologia' | 'transporte';
 type TipoPrestadorOption = { value: TipoPrestadorValue; label: string };
 
@@ -80,8 +79,9 @@ export default function RegisterPage() {
         }
 
         setLoading(true);
+
         const {
-            data: { session },
+            data,
             error,
         } = await supabase.auth.signUp({
             email: email,
@@ -89,24 +89,37 @@ export default function RegisterPage() {
             options: {
                 data: {
                     role: 'client',
-                    tipo_prestador: tipoPrestador.value
+                    tipo_usuario: 'prestador',
+                    tipo_prestador: tipoPrestador.value,
+                    especialidad: tipoPrestador.value,
+                    registration_source: 'mobile'
                 }
             }
         });
 
-        // Si el registro fue exitoso, actualizar el perfil con tipo_prestador
-        if (session && session.user) {
-            const { error: profileError,data } = await supabase
+        const newUserId = data.user?.id;
+
+        // Si el registro fue exitoso, actualizar/crear perfil con los datos del móvil
+        if (newUserId) {
+            const profilePayload = {
+                id: newUserId,
+                email,
+                tipo_usuario: 'prestador',
+                tipo_prestador: tipoPrestador.value,
+                especialidad: tipoPrestador.value,
+                registration_source: 'mobile'
+            };
+
+            const { error: profileError } = await supabase
                 .from('profiles')
-                .update({
-                    tipo_prestador: tipoPrestador.value
-                })
-                .eq('id', session.user.id).select();
+                .upsert(profilePayload, { onConflict: 'id' });
 
             if (profileError) {
                 console.error('Error actualizando perfil:', profileError);
             }
         }
+
+        const session = data.session;
 
         if (error) {
             setErrorMessage(error.message);
@@ -115,6 +128,7 @@ export default function RegisterPage() {
             setSuccessMessage('Por favor revisa tu email para verificar tu cuenta');
             setSuccessModalOpen(true);
         }
+
         setLoading(false);
     }
 
@@ -137,7 +151,7 @@ export default function RegisterPage() {
                         <Text variant="h1" className="text-blue-500 font-bold text-center">
                             Incluir Salud
                         </Text>
-                      <Text variant="muted" className="text-center">
+                        <Text variant="muted" className="text-center">
                             Únete a Incluir Salud y transforma tu práctica médica
                         </Text>
                     </View>

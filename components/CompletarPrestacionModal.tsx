@@ -60,6 +60,7 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
 
   // Estados para modales
   const [successModalOpen, setSuccessModalOpen] = useState(false);
+  const [successTitle, setSuccessTitle] = useState('¡Prestación Completada!');
   const [successMessage, setSuccessMessage] = useState('');
   const [errorModalOpen, setErrorModalOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -111,6 +112,7 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
       );
 
       if (resultado.exito) {
+        setSuccessTitle('¡Prestación Completada!');
         setSuccessMessage('La prestación se completó exitosamente y se ha actualizado en el sistema.');
         setSuccessModalOpen(true);
       } else {
@@ -156,6 +158,7 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
           const seGuardo = prestacionesOffline.some(p => p.prestacion_id === prestacion.prestacion_id);
           
           if (seGuardo) {
+            setSuccessTitle('Prestación guardada offline');
             setSuccessMessage('Prestación guardada offline. Se sincronizará automáticamente cuando tengas conexión.');
             setSuccessModalOpen(true);
           } else {
@@ -268,7 +271,8 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
 
       if (resultado.exito) {
         const extra = direccionAproximada ? `\n${direccionAproximada}` : '';
-        setSuccessMessage(`Sugerencia de ubicación enviada.${extra}`);
+        setSuccessTitle('Sugerencia enviada');
+        setSuccessMessage(`Sugerencia de ubicación enviada.${extra}\nLa prestación no se validó todavía. Volvé a intentar completarla.`);
         setSuccessModalOpen(true);
         setValidationErrorModalOpen(false);
         onSuccess();
@@ -437,7 +441,7 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
           <AlertDialogHeader>
             <View style={styles.modalIconContainer}>
               <CheckCircle2 size={48} color="#10b981" />
-              <AlertDialogTitle style={styles.modalTitle}>¡Prestación Completada!</AlertDialogTitle>
+              <AlertDialogTitle style={styles.modalTitle}>{successTitle}</AlertDialogTitle>
             </View>
             <AlertDialogDescription style={styles.modalDescription}>
               {successMessage}

@@ -2,9 +2,10 @@ import { Session } from '@supabase/supabase-js';
 import { router } from 'expo-router';
 import { Clock, Loader2, MapPin, Phone, Truck } from 'lucide-react-native';
 import moment from 'moment-timezone';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Linking, Platform, RefreshControl, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { useLocation } from '../../hooks/useLocation';
 import {
   AlertDialog,
@@ -47,6 +48,13 @@ function formatSentido(sentido?: string) {
   if (sentido === 'vuelta') return 'Vuelta';
   if (sentido === 'ida_y_vuelta') return 'Ida y vuelta';
   return sentido;
+}
+
+// Verificar si una prestación tiene fecha futura (no se puede completar aún)
+function esFechaFutura(fecha: string) {
+  const fechaPrestacion = moment.tz(fecha, 'America/Argentina/Buenos_Aires').startOf('day');
+  const hoy = prestacionService.obtenerFechaActualArgentina().startOf('day');
+  return fechaPrestacion.isAfter(hoy);
 }
 
 export default function TransportePage() {
@@ -115,6 +123,29 @@ export default function TransportePage() {
       loadData(false);
     }
   }, [session]);
+
+  // Refrescar automáticamente al volver a enfocar la pantalla y sincronizar offline si hay conexión
+  useFocusEffect(
+    useCallback(() => {
+      if (session) {
+        setRefreshing(true);
+        (async () => {
+          try {
+            if (connectivity.isConnected) {
+              const sincronizadas = await prestacionService.sincronizarPrestacionesOffline();
+              if (sincronizadas > 0) {
+                setSuccessMessage(`Se sincronizaron ${sincronizadas} validaciones offline`);
+                setSuccessModalOpen(true);
+              }
+            }
+            await loadData(true);
+          } finally {
+            setRefreshing(false);
+          }
+        })();
+      }
+    }, [session])
+  );
 
   const loadData = async (forceRefresh: boolean) => {
     try {
@@ -437,7 +468,15 @@ export default function TransportePage() {
                         </View>
                       </Button>
 
-                      {p.estado === 'pendiente' ? (
+                      {esFechaFutura(p.fecha) ? (
+                        <Button
+                          size="sm"
+                          className="flex-2 opacity-50"
+                          disabled={true}
+                        >
+                          <Text className="text-xs text-primary-foreground font-medium">Programada</Text>
+                        </Button>
+                      ) : p.estado === 'pendiente' ? (
                         <Button
                           size="sm"
                           className="flex-2"

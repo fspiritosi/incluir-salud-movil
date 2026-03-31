@@ -1,9 +1,10 @@
 import { Session } from '@supabase/supabase-js';
 import { router } from 'expo-router';
-import { AlertTriangle, Building2, CheckCircle, Clock, FileText, Settings, DollarSign, PlayCircle } from 'lucide-react-native';
-import React, { useEffect, useState } from 'react';
+import { AlertTriangle, CheckCircle, Clock, FileText, Settings, DollarSign, PlayCircle } from 'lucide-react-native';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Image, Platform, RefreshControl, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent } from '../../components/ui/card';
 import { Skeleton } from '../../components/ui/skeleton';
@@ -68,6 +69,16 @@ export default function DashboardPage() {
             loadDashboardData();
         }
     }, [session, filtroTemporal]);
+
+    // Refrescar automáticamente al volver a enfocar la pantalla
+    useFocusEffect(
+        useCallback(() => {
+            if (session) {
+                // Forzar datos frescos desde backend cuando regresamos
+                loadDashboardData(true);
+            }
+        }, [session, filtroTemporal])
+    );
 
     const loadDashboardData = async (forceRefresh: boolean = false) => {
         try {
@@ -447,13 +458,6 @@ export default function DashboardPage() {
                                 <Text variant="muted" className="mb-3">
                                     {prestacion.descripcion}
                                 </Text>
-
-                                <View className="flex-row items-center gap-1 mt-1">
-                                    <Building2 size={14} className="text-muted-foreground" />
-                                    <Text variant="small" className="text-muted-foreground italic">
-                                        {prestacion.obra_social}
-                                    </Text>
-                                </View>
                             </CardContent>
                         </Card>
                     ))
@@ -545,13 +549,6 @@ export default function DashboardPage() {
                                 <Text variant="muted" className="mb-3">
                                     {prestacion.descripcion}
                                 </Text>
-
-                                <View className="flex-row items-center gap-1 mt-1">
-                                    <Building2 size={14} className="text-muted-foreground" />
-                                    <Text variant="small" className="text-muted-foreground italic">
-                                        {prestacion.obra_social}
-                                    </Text>
-                                </View>
                             </CardContent>
                         </Card>
                     ))

@@ -1,4 +1,4 @@
-import { Session } from '@supabase/supabase-js';
+ import { Session } from '@supabase/supabase-js';
 import { router } from 'expo-router';
 import {
   CheckCircle,
@@ -11,7 +11,8 @@ import {
   Search
 } from 'lucide-react-native';
 import moment from 'moment-timezone';
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { Linking, Platform, RefreshControl, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import CompletarPrestacionModal from '../../components/CompletarPrestacionModal';
@@ -83,6 +84,9 @@ export default function PrestacionesPage() {
   const [confirmSuggestOpen, setConfirmSuggestOpen] = useState(false);
   const [prestacionParaSugerir, setPrestacionParaSugerir] = useState<PrestacionCompleta | null>(null);
 
+  const esPrestacionTransporte = (prestacion: PrestacionCompleta) =>
+    String(prestacion.tipo_prestacion || '').toLowerCase() === 'transporte';
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
@@ -121,6 +125,30 @@ export default function PrestacionesPage() {
       loadPrestaciones();
     }
   }, [dateFilter, customDateRange]);
+
+  // Refrescar automáticamente al volver a enfocar la pantalla
+  useFocusEffect(
+    useCallback(() => {
+      if (session) {
+        setRefreshing(true);
+        (async () => {
+          try {
+            if (connectivity.isConnected) {
+              const sincronizadas: SincronizacionResult = await prestacionService.sincronizarPrestacionesOffline();
+              if (sincronizadas > 0) {
+                setSuccessMessage(`Se sincronizaron ${sincronizadas} prestaciones offline`);
+                setSuccessModalOpen(true);
+              }
+            }
+            await loadPrestaciones(true);
+            await checkPrestacionesOffline();
+          } finally {
+            setRefreshing(false);
+          }
+        })();
+      }
+    }, [session, dateFilter, customDateRange])
+  );
 
   const loadPrestaciones = async (forceRefresh: boolean = false) => {
     try {
@@ -169,17 +197,17 @@ export default function PrestacionesPage() {
         }
       }
 
-      setPrestacionesPendientes(resultado.pendientes);
-      setPrestacionesCompletadas(resultado.completadas);
+      setPrestacionesPendientes((resultado.pendientes || []).filter((p) => !esPrestacionTransporte(p)));
+      setPrestacionesCompletadas((resultado.completadas || []).filter((p) => !esPrestacionTransporte(p)));
 
       // Si el filtro es "today", guardar pendientes de hoy
       if (dateFilter === 'today') {
-        setPrestacionesPendientesHoy(resultado.pendientes);
+        setPrestacionesPendientesHoy((resultado.pendientes || []).filter((p) => !esPrestacionTransporte(p)));
       } else {
         // Si no es "today", cargar las de hoy por separado para el contador
         try {
           const datosHoy = await prestacionService.obtenerPrestacionesDelDia(undefined, false);
-          setPrestacionesPendientesHoy(datosHoy.pendientes);
+          setPrestacionesPendientesHoy((datosHoy.pendientes || []).filter((p) => !esPrestacionTransporte(p)));
         } catch (error) {
           console.log('No se pudieron cargar prestaciones de hoy para el contador');
         }
@@ -290,6 +318,13 @@ export default function PrestacionesPage() {
 
   const handlePrestacionPress = (prestacion: PrestacionCompleta) => {
     console.log(prestacion.prestacion_id)
+
+    if (esPrestacionTransporte(prestacion)) {
+      setErrorMessage('Esta prestación de transporte debe validarse desde la pantalla Transporte.');
+      setErrorModalOpen(true);
+      return;
+    }
+
     if (prestacion.estado === 'pendiente') {
       setPrestacionSeleccionada(prestacion);
       setModalVisible(true);
@@ -297,7 +332,8 @@ export default function PrestacionesPage() {
   };
 
   const handleModalSuccess = () => {
-    loadPrestaciones();
+    // Forzar refresh desde backend para evitar datos cacheados
+    loadPrestaciones(true);
     checkPrestacionesOffline();
   };
 
@@ -377,6 +413,13 @@ export default function PrestacionesPage() {
     const hace7Dias = ahora.clone().subtract(7, 'days').startOf('day');
 
     return fechaPrestacion.isSameOrAfter(hace7Dias) && fechaPrestacion.isSameOrBefore(ahora);
+  };
+
+  // Verificar si una prestación tiene fecha futura (no se puede completar aún)
+  const esFechaFutura = (fecha: string) => {
+    const fechaPrestacion = moment.tz(fecha, 'America/Argentina/Buenos_Aires').startOf('day');
+    const hoy = prestacionService.obtenerFechaActualArgentina().startOf('day');
+    return fechaPrestacion.isAfter(hoy);
   };
 
   // Obtener badge de urgencia para una prestación
@@ -748,8 +791,18 @@ export default function PrestacionesPage() {
                       </View>
                     </Button>
 
-                    {/* Solo mostrar botón Completar si la prestación es de la última semana */}
-                    {isPrestacionDentroDeUltimaSemana(prestacion.fecha) && (
+                    {/* Botón Completar: deshabilitado si es fecha futura, oculto si está vencido */}
+                    {esFechaFutura(prestacion.fecha) ? (
+                      <Button
+                        size="sm"
+                        className="flex-2 opacity-50"
+                        disabled={true}
+                      >
+                        <Text className="text-xs text-primary-foreground font-medium">
+                          Programada
+                        </Text>
+                      </Button>
+                    ) : isPrestacionDentroDeUltimaSemana(prestacion.fecha) && (
                       <Button
                         size="sm"
                         className="flex-2"
