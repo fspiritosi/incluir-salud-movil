@@ -131,6 +131,31 @@ class PrestacionService {
     return payload;
   }
 
+  async sugerirUbicacionCentro(
+    centroId: string,
+    ubicacionLat: number,
+    ubicacionLng: number,
+    precisionM?: number | null
+  ): Promise<{ exito: boolean; mensaje: string }> {
+    const { data, error } = await supabase.rpc('sugerir_ubicacion_centro', {
+      p_centro_id: centroId,
+      p_lat: ubicacionLat,
+      p_lng: ubicacionLng,
+      p_precision_m: precisionM ?? null,
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    const payload = (data?.[0] as { exito: boolean; mensaje: string } | undefined) ?? {
+      exito: false,
+      mensaje: 'Respuesta inválida al sugerir ubicación del centro',
+    };
+
+    return payload;
+  }
+
   // Transporte: iniciar prestación (valida ORIGEN según sentido_transporte)
   async iniciarPrestacionTransporteConValidacion(
     prestacionId: string,
@@ -495,7 +520,7 @@ class PrestacionService {
         ubicacion_paciente_lat: p.paciente_lat || 0,
         ubicacion_paciente_lng: p.paciente_lng || 0,
         paciente_tiene_ubicacion_sugerida: Boolean(p.paciente_tiene_ubicacion_sugerida),
-        obra_social: p.obra_social_nombre || 'Sin obra social',
+        obra_social: p.obra_social_nombre || '',
         estado: p.estado,
         tipo_prestacion: p.tipo_prestacion,
         chofer_user_id: p.chofer_user_id ?? null,
@@ -592,7 +617,7 @@ class PrestacionService {
           ubicacion_paciente_lat: p.paciente_lat || 0,
           ubicacion_paciente_lng: p.paciente_lng || 0,
           paciente_tiene_ubicacion_sugerida: Boolean(p.paciente_tiene_ubicacion_sugerida),
-          obra_social: p.obra_social_nombre || 'Sin obra social',
+          obra_social: p.obra_social_nombre || '',
           estado: p.estado,
           tipo_prestacion: p.tipo_prestacion,
           chofer_user_id: p.chofer_user_id ?? null,
@@ -1167,7 +1192,7 @@ class PrestacionService {
           ubicacion_paciente_lat: p.paciente_lat || 0,
           ubicacion_paciente_lng: p.paciente_lng || 0,
           paciente_tiene_ubicacion_sugerida: Boolean(p.paciente_tiene_ubicacion_sugerida),
-          obra_social: p.obra_social_nombre || 'Sin obra social',
+          obra_social: p.obra_social_nombre || '',
           estado: p.estado,
           tipo_prestacion: p.tipo_prestacion,
           chofer_user_id: p.chofer_user_id ?? null,
@@ -1334,7 +1359,7 @@ class PrestacionService {
       const centrosMap = new Map<string, { nombre: string; count: number }>();
 
       for (const p of pendientes) {
-        if (p.centro_id && p.centro_nombre) {
+        if (p.centro_id && p.centro_nombre && p.tipo_prestacion !== 'Transporte') {
           const existing = centrosMap.get(p.centro_id);
           if (existing) {
             existing.count++;
@@ -1417,7 +1442,7 @@ class PrestacionService {
             ubicacion_paciente_lat: p.paciente_lat || 0,
             ubicacion_paciente_lng: p.paciente_lng || 0,
             paciente_tiene_ubicacion_sugerida: Boolean(p.paciente_tiene_ubicacion_sugerida),
-            obra_social: p.obra_social_nombre || 'Sin obra social',
+            obra_social: p.obra_social_nombre || '',
             estado: p.estado,
             tipo_prestacion: p.tipo_prestacion,
             notas: p.notas || undefined,

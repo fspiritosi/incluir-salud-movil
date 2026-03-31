@@ -11,6 +11,7 @@ import {
 import React, { useEffect, useState, useCallback } from 'react';
 import { RefreshControl, ScrollView, View, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardHeader } from '../../components/ui/card';
 import { Checkbox } from '../../components/ui/checkbox';
@@ -54,8 +55,10 @@ export default function ValidarCentroPage() {
   const [prestaciones, setPrestaciones] = useState<PrestacionCentro[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [validating, setValidating] = useState(false);
+  const [suggestingCenterLocation, setSuggestingCenterLocation] = useState(false);
 
   const [successModalOpen, setSuccessModalOpen] = useState(false);
+  const [successModalContext, setSuccessModalContext] = useState<'validacion' | 'sugerencia'>('validacion');
   const [successMessage, setSuccessMessage] = useState('');
   const [errorModalOpen, setErrorModalOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -91,10 +94,67 @@ export default function ValidarCentroPage() {
     loadPrestaciones();
   }, [loadPrestaciones]);
 
+  // Refrescar automáticamente al volver a enfocar la pantalla
+  useFocusEffect(
+    useCallback(() => {
+      setRefreshing(true);
+      (async () => {
+        await loadPrestaciones();
+        setRefreshing(false);
+      })();
+    }, [loadPrestaciones])
+  );
+
   const onRefresh = async () => {
     setRefreshing(true);
     await loadPrestaciones();
     setRefreshing(false);
+  };
+
+  const handleSugerirUbicacionCentro = async () => {
+    if (!centroId) return;
+
+    if (!connectivity.isConnected) {
+      setErrorMessage('La sugerencia de ubicación requiere conexión a internet');
+      setErrorDetail(null);
+      setErrorModalOpen(true);
+      return;
+    }
+
+    try {
+      setSuggestingCenterLocation(true);
+
+      const ubicacion = await requestLocation();
+      if (!ubicacion) {
+        setErrorMessage('No se pudo obtener tu ubicación. Verificá GPS y permisos.');
+        setErrorDetail(null);
+        setErrorModalOpen(true);
+        return;
+      }
+
+      const resultado = await prestacionService.sugerirUbicacionCentro(
+        String(centroId),
+        ubicacion.latitude,
+        ubicacion.longitude,
+        typeof ubicacion.accuracy === 'number' ? Math.round(ubicacion.accuracy) : null
+      );
+
+      if (resultado.exito) {
+        setSuccessModalContext('sugerencia');
+        setSuccessMessage(resultado.mensaje || 'Sugerencia de ubicación enviada para el centro');
+        setSuccessModalOpen(true);
+      } else {
+        setErrorMessage(resultado.mensaje || 'No se pudo enviar la sugerencia de ubicación del centro');
+        setErrorDetail(null);
+        setErrorModalOpen(true);
+      }
+    } catch (e: any) {
+      setErrorMessage(e?.message || 'No se pudo enviar la sugerencia de ubicación del centro');
+      setErrorDetail(null);
+      setErrorModalOpen(true);
+    } finally {
+      setSuggestingCenterLocation(false);
+    }
   };
 
   const toggleSelection = (id: string) => {
@@ -174,6 +234,7 @@ export default function ValidarCentroPage() {
       );
 
       if (result.exito) {
+        setSuccessModalContext('validacion');
         setSuccessMessage(result.mensaje);
         setSuccessModalOpen(true);
       } else {
@@ -192,7 +253,9 @@ export default function ValidarCentroPage() {
 
   const handleSuccessClose = () => {
     setSuccessModalOpen(false);
-    router.back();
+    if (successModalContext === 'validacion') {
+      router.back();
+    }
   };
 
   if (!centroId) {
@@ -357,6 +420,25 @@ export default function ValidarCentroPage() {
                   </View>
                 )}
               </Button>
+
+              <Button
+                onPress={handleSugerirUbicacionCentro}
+                disabled={suggestingCenterLocation || !connectivity.isConnected}
+                variant="outline"
+                className="w-full mt-3"
+              >
+                {suggestingCenterLocation ? (
+                  <View className="flex-row items-center gap-2">
+                    <Loader2 size={18} className="text-foreground" />
+                    <Text className="font-medium">Enviando sugerencia...</Text>
+                  </View>
+                ) : (
+                  <View className="flex-row items-center gap-2">
+                    <MapPin size={18} className="text-foreground" />
+                    <Text className="font-medium">Sugerir ubicación del centro</Text>
+                  </View>
+                )}
+              </Button>
             </View>
           </>
         )}
@@ -369,7 +451,9 @@ export default function ValidarCentroPage() {
             <AlertDialogTitle>
               <View className="flex-row items-center gap-2">
                 <CheckCircle size={24} className="text-green-500" />
-                <Text className="text-lg font-semibold">¡Validación exitosa!</Text>
+                <Text className="text-lg font-semibold">
+                  {successModalContext === 'validacion' ? '¡Validación exitosa!' : 'Sugerencia enviada'}
+                </Text>
               </View>
             </AlertDialogTitle>
             <AlertDialogDescription>{successMessage}</AlertDialogDescription>
