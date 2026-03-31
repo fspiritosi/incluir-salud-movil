@@ -1,13 +1,55 @@
 import { Tabs } from 'expo-router';
-import { BarChart3, FileText, Home, User } from 'lucide-react-native';
+import { BarChart3, FileText, Home, Truck, User } from 'lucide-react-native';
 import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import React, { useEffect, useState } from 'react';
+import { choferService } from '../../services/choferService';
+
+type DashboardMode = 'unknown' | 'transporte' | 'prestaciones';
 
 export default function DashboardLayout() {
   const insets = useSafeAreaInsets();
+  const [mode, setMode] = useState<DashboardMode>('unknown');
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const [isChofer, isTransportista, isPrestadorNoTransporte] = await Promise.all([
+          choferService.isChofer(),
+          choferService.isTransportista(),
+          choferService.isPrestadorNoTransporte(),
+        ]);
+        if (!mounted) return;
+
+        if (isChofer || isTransportista) {
+          setMode('transporte');
+        } else if (isPrestadorNoTransporte) {
+          setMode('prestaciones');
+        } else {
+          // Usuarios administrativos o sin tipo: muestran vista general con prestaciones
+          setMode('prestaciones');
+        }
+      } catch {
+        if (mounted) setMode('prestaciones');
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  if (mode === 'unknown') {
+    return null;
+  }
+
+  const showTransportTab = mode === 'transporte';
+  const showPrestacionesTab = mode !== 'transporte';
+  const showDashboardTab = true; // ahora todos los usuarios ven Inicio
 
   return (
     <Tabs
+      initialRouteName={showTransportTab ? 'transporte' : 'dashboard'}
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
@@ -32,6 +74,7 @@ export default function DashboardLayout() {
         name="dashboard"
         options={{
           title: 'Inicio',
+          href: showDashboardTab ? undefined : null,
           tabBarIcon: ({ color, size }) => (
             <Home size={size} color={color} />
           ),
@@ -41,8 +84,19 @@ export default function DashboardLayout() {
         name="prestaciones"
         options={{
           title: 'Prestaciones',
+          href: showPrestacionesTab ? undefined : null,
           tabBarIcon: ({ color, size }) => (
             <FileText size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="transporte"
+        options={{
+          title: 'Transporte',
+          href: showTransportTab ? undefined : null,
+          tabBarIcon: ({ color, size }) => (
+            <Truck size={size} color={color} />
           ),
         }}
       />
@@ -62,6 +116,27 @@ export default function DashboardLayout() {
           tabBarIcon: ({ color, size }) => (
             <User size={size} color={color} />
           ),
+        }}
+      />
+      <Tabs.Screen
+        name="choferes"
+        options={{
+          title: 'Choferes',
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="asignar-transporte"
+        options={{
+          title: 'Asignar Transporte',
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="validar-centro"
+        options={{
+          title: 'Validar Centro',
+          href: null,
         }}
       />
     </Tabs>

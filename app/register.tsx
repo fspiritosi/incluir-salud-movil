@@ -3,6 +3,7 @@ import { View, ScrollView, Image, TouchableOpacity } from 'react-native';
 import { router } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { Session } from '@supabase/supabase-js';
+import { choferService } from '../services/choferService';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Text } from '../components/ui/text';
@@ -24,6 +25,14 @@ import {
     AlertDialogTitle,
 } from '../components/ui/alert-dialog';
 
+type TipoPrestadorValue = 'acompanante_terapeutico' | 'kinesiologia' | 'transporte';
+type TipoPrestadorOption = { value: TipoPrestadorValue; label: string };
+
+const TIPO_PRESTADOR_OPTIONS: TipoPrestadorOption[] = [
+    { value: 'acompanante_terapeutico', label: 'Acompañante Terapéutico' },
+    { value: 'kinesiologia', label: 'Kinesiología' },
+    { value: 'transporte', label: 'Transporte' }
+];
 
 export default function RegisterPage() {
     const [email, setEmail] = useState('');
@@ -31,6 +40,7 @@ export default function RegisterPage() {
     const [confirmPassword, setConfirmPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+    const [tipoPrestador, setTipoPrestador] = useState<TipoPrestadorOption>(TIPO_PRESTADOR_OPTIONS[0]);
 
     // Estados para modales
     const [errorModalOpen, setErrorModalOpen] = useState(false);
@@ -48,7 +58,7 @@ export default function RegisterPage() {
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
             setSession(session);
             if (session) {
-                router.replace('/(dashboard)/dashboard');
+                choferService.getLandingRoute().then((path) => router.replace(path));
             }
         });
 
@@ -69,8 +79,9 @@ export default function RegisterPage() {
         }
 
         setLoading(true);
+
         const {
-            data: { session },
+            data,
             error,
         } = await supabase.auth.signUp({
             email: email,
@@ -78,24 +89,37 @@ export default function RegisterPage() {
             options: {
                 data: {
                     role: 'client',
-                    tipo_prestador: 'acompanante_terapeutico'
+                    tipo_usuario: 'prestador',
+                    tipo_prestador: tipoPrestador.value,
+                    especialidad: tipoPrestador.value,
+                    registration_source: 'mobile'
                 }
             }
         });
 
-        // Si el registro fue exitoso, actualizar el perfil con tipo_prestador
-        if (session && session.user) {
-            const { error: profileError,data } = await supabase
+        const newUserId = data.user?.id;
+
+        // Si el registro fue exitoso, actualizar/crear perfil con los datos del móvil
+        if (newUserId) {
+            const profilePayload = {
+                id: newUserId,
+                email,
+                tipo_usuario: 'prestador',
+                tipo_prestador: tipoPrestador.value,
+                especialidad: tipoPrestador.value,
+                registration_source: 'mobile'
+            };
+
+            const { error: profileError } = await supabase
                 .from('profiles')
-                .update({
-                    tipo_prestador: 'acompanante_terapeutico'
-                })
-                .eq('id', session.user.id).select();
+                .upsert(profilePayload, { onConflict: 'id' });
 
             if (profileError) {
                 console.error('Error actualizando perfil:', profileError);
             }
         }
+
+        const session = data.session;
 
         if (error) {
             setErrorMessage(error.message);
@@ -104,11 +128,12 @@ export default function RegisterPage() {
             setSuccessMessage('Por favor revisa tu email para verificar tu cuenta');
             setSuccessModalOpen(true);
         }
+
         setLoading(false);
     }
 
     if (session) {
-        router.replace('/(dashboard)/dashboard');
+        choferService.getLandingRoute().then((path) => router.replace(path));
         return null;
     }
 
@@ -126,7 +151,7 @@ export default function RegisterPage() {
                         <Text variant="h1" className="text-blue-500 font-bold text-center">
                             Incluir Salud
                         </Text>
-                      <Text variant="muted" className="text-center">
+                        <Text variant="muted" className="text-center">
                             Únete a Incluir Salud y transforma tu práctica médica
                         </Text>
                     </View>
@@ -195,14 +220,24 @@ export default function RegisterPage() {
                         <View className="mb-4">
                             <Text variant="small" className="mb-2">Tipo de Prestador</Text>
                             <Select
-                                value={{ value: 'acompanante_terapeutico', label: 'Acompañante Terapéutico' }}
-                                disabled={true}
+                                value={tipoPrestador}
+                                onValueChange={(option) => {
+                                    if (option) {
+                                        setTipoPrestador(option as TipoPrestadorOption);
+                                    }
+                                }}
                             >
                                 <SelectTrigger>
-                                    <SelectValue placeholder="Acompañante Terapéutico" />
+                                    <SelectValue placeholder="Seleccioná tu especialidad" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem label="Acompañante Terapéutico" value="acompanante_terapeutico" />
+                                    {TIPO_PRESTADOR_OPTIONS.map((option) => (
+                                        <SelectItem
+                                            key={option.value}
+                                            label={option.label}
+                                            value={option.value}
+                                        />
+                                    ))}
                                 </SelectContent>
                             </Select>
                         </View>

@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { View, ScrollView, Platform } from 'react-native';
+import { View, ScrollView, Platform, ActivityIndicator, RefreshControl } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { router } from 'expo-router';
-import { supabase, supabaseAdmin } from '../../lib/supabase';
+import { supabase } from '../../lib/supabase';
 import { Session } from '@supabase/supabase-js';
 import { Text } from '../../components/ui/text';
 import { Card, CardContent, CardHeader } from '../../components/ui/card';
@@ -21,10 +23,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '../../components/ui/alert-dialog';
-import { User, Mail, Lock, LogOut, RefreshCw, CheckCircle, DollarSign, Trash2, AlertTriangle } from 'lucide-react-native';
+import { User, Mail, Lock, LogOut, RefreshCw, CheckCircle, DollarSign, Trash2, AlertTriangle, Camera } from 'lucide-react-native';
 import * as Updates from 'expo-updates';
 import { prestacionService } from '../../services/prestacionService';
 import moment from 'moment-timezone';
+
+const MAX_AVATAR_SIZE = 5 * 1024 * 1024; // 5MB
+const AVATAR_WIDTH = 600;
 
 export default function PerfilPage() {
     const insets = useSafeAreaInsets();
@@ -49,12 +54,22 @@ export default function PerfilPage() {
     const [avatarUrl, setAvatarUrl] = useState('');
     const [updateStatus, setUpdateStatus] = useState('');
     const [tipoPrestador, setTipoPrestador] = useState<string | null>(null);
+    const [uploadingAvatar, setUploadingAvatar] = useState(false);
     const [estadisticas, setEstadisticas] = useState<{
         totalCompletadas: number;
         promedioMensual: number;
         montoTotal: number;
     } | null>(null);
     const [cargandoEstadisticas, setCargandoEstadisticas] = useState(false);
+    const [refreshing, setRefreshing] = useState(false);
+    const [changeEmailModalOpen, setChangeEmailModalOpen] = useState(false);
+    const [newEmail, setNewEmail] = useState('');
+    const [confirmNewEmail, setConfirmNewEmail] = useState('');
+    const [updatingEmail, setUpdatingEmail] = useState(false);
+    const [changePasswordModalOpen, setChangePasswordModalOpen] = useState(false);
+    const [newAccountPassword, setNewAccountPassword] = useState('');
+    const [confirmAccountPassword, setConfirmAccountPassword] = useState('');
+    const [updatingPassword, setUpdatingPassword] = useState(false);
 
     useEffect(() => {
         supabase.auth.getSession().then(({ data: { session } }) => {
@@ -77,6 +92,23 @@ export default function PerfilPage() {
 
         return () => subscription.unsubscribe();
     }, []);
+
+    const onRefresh = async () => {
+        if (!session) return;
+        setRefreshing(true);
+        try {
+            // Recargar sesión para obtener metadata actualizada
+            const { data: { session: newSession } } = await supabase.auth.refreshSession();
+            if (newSession) {
+                setSession(newSession);
+                await loadProfile(newSession);
+            }
+        } catch (error) {
+            console.error('Error refrescando perfil:', error);
+        } finally {
+            setRefreshing(false);
+        }
+    };
 
     const loadProfile = async (session: Session) => {
         const metadata = session.user.user_metadata || {};
@@ -129,6 +161,104 @@ export default function PerfilPage() {
         }
     };
 
+    const pickAndUploadAvatar = async () => {
+        if (!session) return;
+
+        try {
+            // Solicitar permisos
+            const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+            if (status !== 'granted') {
+                setErrorMessage('Se necesitan permisos para acceder a la galería');
+                setErrorModalOpen(true);
+                return;
+            }
+
+            // Abrir selector de imagen
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ['images'],
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.7,
+            });
+
+            if (result.canceled || !result.assets || result.assets.length === 0) {
+                return;
+            }
+
+            setUploadingAvatar(true);
+
+            const image = result.assets[0];
+            const userId = session.user.id;
+            const fileName = `${userId}.jpg`;
+
+            // Comprimir/redimensionar para asegurar tamaño pequeño
+            const manipulated = await ImageManipulator.manipulateAsync(
+                image.uri,
+                [{ resize: { width: AVATAR_WIDTH } }],
+                {
+                    compress: 0.6,
+                    format: ImageManipulator.SaveFormat.JPEG,
+                }
+            );
+
+            const response = await fetch(manipulated.uri);
+            const blob = await response.blob();
+
+            if (blob.size > MAX_AVATAR_SIZE) {
+                setErrorMessage('La imagen es muy pesada incluso después de comprimirla. Usa una foto más liviana (< 5MB).');
+                setErrorModalOpen(true);
+                setUploadingAvatar(false);
+                return;
+            }
+
+            const arrayBuffer = await blob.arrayBuffer();
+
+            // Subir a Supabase Storage
+            const { error: uploadError } = await supabase.storage
+                .from('avatars')
+                .upload(fileName, arrayBuffer, {
+                    contentType: 'image/jpeg',
+                    upsert: true,
+                });
+
+            if (uploadError) {
+                throw uploadError;
+            }
+
+            // Obtener URL pública
+            const { data: urlData } = supabase.storage
+                .from('avatars')
+                .getPublicUrl(fileName);
+
+            const publicUrl = `${urlData.publicUrl}?t=${Date.now()}`;
+
+            // Actualizar metadata del usuario
+            const { error: updateError } = await supabase.auth.updateUser({
+                data: { avatar_url: publicUrl }
+            });
+
+            if (updateError) {
+                throw updateError;
+            }
+
+            // Actualizar estado local
+            setAvatarUrl(publicUrl);
+            setSuccessMessage('Foto de perfil actualizada correctamente');
+            setSuccessModalOpen(true);
+
+        } catch (error) {
+            console.error('Error subiendo avatar:', error);
+            if (error instanceof Error) {
+                setErrorMessage(`Error al subir la foto: ${error.message}`);
+            } else {
+                setErrorMessage('Error al subir la foto de perfil');
+            }
+            setErrorModalOpen(true);
+        } finally {
+            setUploadingAvatar(false);
+        }
+    };
+
     const updateProfile = async () => {
         if (!session) return;
 
@@ -141,6 +271,7 @@ export default function PerfilPage() {
                 full_name: `${firstName} ${lastName}`.trim(),
                 phone: phone,
                 avatar_url: avatarUrl,
+                document_number: documentNumber,
             };
 
             const { error } = await supabase.auth.updateUser({
@@ -149,6 +280,29 @@ export default function PerfilPage() {
 
             if (error) {
                 throw error;
+            }
+
+            // Sincronizar tabla profiles
+            const profilePayload = {
+                id: session.user.id,
+                email: session.user.email,
+                nombre: firstName || null,
+                apellido: lastName || null,
+                telefono: phone || null,
+                documento: documentNumber || null,
+                tipo_usuario: session.user.user_metadata?.tipo_usuario ?? null,
+                tipo_prestador: tipoPrestador ?? session.user.user_metadata?.tipo_prestador ?? null,
+                especialidad: session.user.user_metadata?.especialidad ?? null,
+                registration_source: session.user.user_metadata?.registration_source ?? 'mobile'
+            };
+
+            const { error: profileError } = await supabase
+                .from('profiles')
+                .upsert(profilePayload, { onConflict: 'id' });
+
+            if (profileError) {
+                console.error('Error actualizando profiles:', profileError);
+                throw profileError;
             }
 
             setSuccessMessage('Perfil actualizado correctamente');
@@ -183,47 +337,9 @@ export default function PerfilPage() {
     };
 
     const executeDeleteAccount = async () => {
-        if (!session) return;
-
-        try {
-            setDeletingAccount(true);
-            const userId = session.user.id;
-
-            // 1. Eliminar el usuario usando Admin API (baneando permanentemente)
-            // Baneo permanente (876000 horas = ~100 años, efectivamente permanente)
-            const { error: banError } = await supabaseAdmin.auth.admin.updateUserById(
-                userId,
-                {
-                    ban_duration: '876000h' // Baneo permanente (~100 años)
-                }
-            );
-
-            if (banError) {
-                console.error('Error eliminando cuenta:', banError);
-                throw new Error('No se pudo eliminar la cuenta. Por favor, contacta al soporte.');
-            }
-
-            // 2. Cerrar sesión y redirigir
-            await supabase.auth.signOut();
-            
-            setDeleteAccountConfirmModalOpen(false);
-            setSuccessMessage('Tu cuenta ha sido borrada exitosamente. Ya no podrás iniciar sesión.');
-            setSuccessModalOpen(true);
-            
-            // Redirigir después de un breve delay
-            setTimeout(() => {
-                router.replace('/');
-            }, 2000);
-        } catch (error) {
-            console.error('Error eliminando cuenta:', error);
-            setErrorMessage(
-                error instanceof Error 
-                    ? error.message 
-                    : 'Error al eliminar la cuenta. Por favor, contacta al soporte si el problema persiste.'
-            );
-            setErrorModalOpen(true);
-            setDeletingAccount(false);
-        }
+        setDeleteAccountConfirmModalOpen(false);
+        setInfoMessage('Por seguridad, la eliminación de cuenta debe solicitarse a soporte.');
+        setInfoModalOpen(true);
     };
 
     const checkForUpdates = async () => {
@@ -262,6 +378,14 @@ export default function PerfilPage() {
             contentContainerStyle={{
                 paddingBottom: Platform.OS === 'android' ? 70 + Math.max(insets.bottom, 0) + 20 : 90
             }}
+            refreshControl={
+                <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={onRefresh}
+                    colors={['#3b82f6']}
+                    tintColor="#3b82f6"
+                />
+            }
         >
             {/* Header */}
             <View className="p-6 pt-16 bg-card">
@@ -302,15 +426,19 @@ export default function PerfilPage() {
                         <Button 
                             variant="outline" 
                             size="sm"
-                            onPress={() => {
-                                setInfoMessage('La función de cambiar foto estará disponible pronto');
-                                setInfoModalOpen(true);
-                            }}
+                            onPress={pickAndUploadAvatar}
+                            disabled={uploadingAvatar}
                             className="mt-2"
                         >
                             <View className="flex-row items-center gap-2">
-                                <User size={16} className="text-muted-foreground" />
-                                <Text className="text-sm">Cambiar Foto</Text>
+                                {uploadingAvatar ? (
+                                    <ActivityIndicator size="small" color="#6b7280" />
+                                ) : (
+                                    <Camera size={16} className="text-muted-foreground" />
+                                )}
+                                <Text className="text-sm">
+                                    {uploadingAvatar ? 'Subiendo...' : 'Cambiar Foto'}
+                                </Text>
                             </View>
                         </Button>
                     </View>
@@ -348,6 +476,16 @@ export default function PerfilPage() {
                             onChangeText={setPhone}
                             placeholder="Tu teléfono"
                             keyboardType="phone-pad"
+                        />
+                    </View>
+
+                    <View className="mb-4">
+                        <Text variant="small" className="mb-2 font-medium">Documento (DNI)</Text>
+                        <Input
+                            value={documentNumber}
+                            onChangeText={setDocumentNumber}
+                            placeholder="Tu número de documento"
+                            keyboardType="numeric"
                         />
                     </View>
 
@@ -457,8 +595,9 @@ export default function PerfilPage() {
                 <Button
                     variant="outline"
                     onPress={() => {
-                        setInfoMessage('Esta función estará disponible pronto');
-                        setInfoModalOpen(true);
+                        setNewAccountPassword('');
+                        setConfirmAccountPassword('');
+                        setChangePasswordModalOpen(true);
                     }}
                     className="w-full"
                 >
@@ -471,8 +610,9 @@ export default function PerfilPage() {
                 <Button
                     variant="outline"
                     onPress={() => {
-                        setInfoMessage('Esta función estará disponible pronto');
-                        setInfoModalOpen(true);
+                        setNewEmail(session.user.email ?? '');
+                        setConfirmNewEmail(session.user.email ?? '');
+                        setChangeEmailModalOpen(true);
                     }}
                     className="w-full"
                 >
@@ -604,6 +744,155 @@ export default function PerfilPage() {
                 <AlertDialogFooter>
                     <AlertDialogAction onPress={() => setInfoModalOpen(false)}>
                         <Text>OK</Text>
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Modal Cambiar Email */}
+        <AlertDialog open={changeEmailModalOpen} onOpenChange={setChangeEmailModalOpen}>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Cambiar email</AlertDialogTitle>
+                    <AlertDialogDescription>
+                        Ingresá el nuevo correo. Te enviaremos un email de confirmación.
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <View className="mt-4 gap-3">
+                    <View>
+                        <Text variant="small" className="mb-2">Nuevo email</Text>
+                        <Input
+                            value={newEmail}
+                            onChangeText={setNewEmail}
+                            autoCapitalize="none"
+                            keyboardType="email-address"
+                        />
+                    </View>
+                    <View>
+                        <Text variant="small" className="mb-2">Confirmar email</Text>
+                        <Input
+                            value={confirmNewEmail}
+                            onChangeText={setConfirmNewEmail}
+                            autoCapitalize="none"
+                            keyboardType="email-address"
+                        />
+                    </View>
+                </View>
+                <AlertDialogFooter>
+                    <AlertDialogCancel onPress={() => setChangeEmailModalOpen(false)}>
+                        <Text>Cancelar</Text>
+                    </AlertDialogCancel>
+                    <AlertDialogAction
+                        disabled={updatingEmail}
+                        onPress={async () => {
+                            if (!newEmail || !confirmNewEmail) {
+                                setErrorMessage('Completá ambos campos.');
+                                setErrorModalOpen(true);
+                                return;
+                            }
+                            if (newEmail.toLowerCase() !== confirmNewEmail.toLowerCase()) {
+                                setErrorMessage('Los emails no coinciden.');
+                                setErrorModalOpen(true);
+                                return;
+                            }
+                            try {
+                                setUpdatingEmail(true);
+                                const { data, error } = await supabase.auth.updateUser({
+                                    email: newEmail.trim().toLowerCase(),
+                                });
+                                if (error) {
+                                    throw error;
+                                }
+
+                                setChangeEmailModalOpen(false);
+                                setInfoMessage('Te enviamos un correo para confirmar el cambio. Hasta confirmarlo, seguirás usando tu email actual.');
+                                setInfoModalOpen(true);
+                            } catch (err) {
+                                console.error('Error cambiando email:', err);
+                                setErrorMessage(err instanceof Error ? err.message : 'No se pudo actualizar el email.');
+                                setErrorModalOpen(true);
+                            } finally {
+                                setUpdatingEmail(false);
+                            }
+                        }}
+                    >
+                        <Text>{updatingEmail ? 'Guardando...' : 'Guardar cambios'}</Text>
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Modal Cambiar Contraseña */}
+        <AlertDialog open={changePasswordModalOpen} onOpenChange={setChangePasswordModalOpen}>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Cambiar contraseña</AlertDialogTitle>
+                    <AlertDialogDescription>
+                        Creá una nueva contraseña para tu cuenta.
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <View className="mt-4 gap-3">
+                    <View>
+                        <Text variant="small" className="mb-2">Nueva contraseña</Text>
+                        <Input
+                            secureTextEntry
+                            value={newAccountPassword}
+                            onChangeText={setNewAccountPassword}
+                            placeholder="Mínimo 6 caracteres"
+                        />
+                    </View>
+                    <View>
+                        <Text variant="small" className="mb-2">Confirmar contraseña</Text>
+                        <Input
+                            secureTextEntry
+                            value={confirmAccountPassword}
+                            onChangeText={setConfirmAccountPassword}
+                            placeholder="Repetí tu contraseña"
+                        />
+                    </View>
+                </View>
+                <AlertDialogFooter>
+                    <AlertDialogCancel onPress={() => setChangePasswordModalOpen(false)}>
+                        <Text>Cancelar</Text>
+                    </AlertDialogCancel>
+                    <AlertDialogAction
+                        disabled={updatingPassword}
+                        onPress={async () => {
+                            if (newAccountPassword.length < 6) {
+                                setErrorMessage('La contraseña debe tener al menos 6 caracteres.');
+                                setErrorModalOpen(true);
+                                return;
+                            }
+                            if (newAccountPassword !== confirmAccountPassword) {
+                                setErrorMessage('Las contraseñas no coinciden.');
+                                setErrorModalOpen(true);
+                                return;
+                            }
+
+                            try {
+                                setUpdatingPassword(true);
+                                const { error } = await supabase.auth.updateUser({
+                                    password: newAccountPassword,
+                                });
+                                if (error) {
+                                    throw error;
+                                }
+
+                                setChangePasswordModalOpen(false);
+                                setInfoMessage('Contraseña actualizada correctamente.');
+                                setInfoModalOpen(true);
+                                setNewAccountPassword('');
+                                setConfirmAccountPassword('');
+                            } catch (err) {
+                                console.error('Error cambiando contraseña:', err);
+                                setErrorMessage(err instanceof Error ? err.message : 'No se pudo actualizar la contraseña.');
+                                setErrorModalOpen(true);
+                            } finally {
+                                setUpdatingPassword(false);
+                            }
+                        }}
+                    >
+                        <Text>{updatingPassword ? 'Guardando...' : 'Guardar cambios'}</Text>
                     </AlertDialogAction>
                 </AlertDialogFooter>
             </AlertDialogContent>

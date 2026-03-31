@@ -58,15 +58,27 @@ export interface PrestacionCompleta {
   paciente_telefono: string;
   ubicacion_paciente_lat: number;
   ubicacion_paciente_lng: number;
+  paciente_tiene_ubicacion_sugerida?: boolean;
   obra_social: string;
   estado: 'pendiente' | 'completada' | 'cancelada' | 'en_proceso';
   tipo_prestacion: string;
+  chofer_user_id?: string | null;
+  sentido_transporte?: string;
+  centro_id?: string;
+  centro_nombre?: string;
+  centro_direccion?: string;
+  centro_lat?: number;
+  centro_lng?: number;
+  centro_radio_metros?: number;
+  centro_tiene_ubicacion_sugerida?: boolean;
+  started_at?: string;
   notas?: string;
   paciente_id: string;
 }
 
 export interface PrestacionOffline {
   prestacion_id: string;
+  accion?: 'cerrar' | 'transporte_iniciar' | 'transporte_finalizar';
   ubicacion_lat: number;
   ubicacion_lng: number;
   notas: string;
@@ -92,6 +104,142 @@ class PrestacionService {
     // Configurar moment.js con el timezone de Argentina y locale en español
     moment.tz.setDefault(this.TIMEZONE);
     moment.locale('es');
+  }
+
+  async sugerirUbicacionDesdePrestacion(
+    prestacionId: string,
+    ubicacionLat: number,
+    ubicacionLng: number,
+    precisionM?: number | null
+  ): Promise<{ exito: boolean; mensaje: string }> {
+    const { data, error } = await supabase.rpc('sugerir_ubicacion_desde_prestacion', {
+      p_prestacion_id: prestacionId,
+      p_lat: ubicacionLat,
+      p_lng: ubicacionLng,
+      p_precision_m: precisionM ?? null,
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    const payload = (data?.[0] as { exito: boolean; mensaje: string } | undefined) ?? {
+      exito: false,
+      mensaje: 'Respuesta inválida al sugerir ubicación',
+    };
+
+    return payload;
+  }
+
+  async sugerirUbicacionCentro(
+    centroId: string,
+    ubicacionLat: number,
+    ubicacionLng: number,
+    precisionM?: number | null
+  ): Promise<{ exito: boolean; mensaje: string }> {
+    const { data, error } = await supabase.rpc('sugerir_ubicacion_centro', {
+      p_centro_id: centroId,
+      p_lat: ubicacionLat,
+      p_lng: ubicacionLng,
+      p_precision_m: precisionM ?? null,
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    const payload = (data?.[0] as { exito: boolean; mensaje: string } | undefined) ?? {
+      exito: false,
+      mensaje: 'Respuesta inválida al sugerir ubicación del centro',
+    };
+
+    return payload;
+  }
+
+  // Transporte: iniciar prestación (valida ORIGEN según sentido_transporte)
+  async iniciarPrestacionTransporteConValidacion(
+    prestacionId: string,
+    ubicacionLat: number,
+    ubicacionLng: number
+  ): Promise<ValidacionUbicacion> {
+    const isOnline = await connectivityService.isOnline();
+    if (!isOnline) {
+      const validacionOffline = await this.validarUbicacionTransporteOffline(prestacionId, ubicacionLat, ubicacionLng, 'iniciar');
+      if (validacionOffline.exito) {
+        await this.guardarPrestacionOffline({
+          prestacion_id: prestacionId,
+          accion: 'transporte_iniciar',
+          ubicacion_lat: ubicacionLat,
+          ubicacion_lng: ubicacionLng,
+          notas: '',
+          timestamp: new Date().toISOString(),
+          distancia_metros: validacionOffline.distancia_metros,
+        });
+        await this.actualizarCacheTransporte(prestacionId, 'iniciar');
+      }
+      return validacionOffline;
+    }
+
+    const { data, error } = await supabase.rpc('iniciar_prestacion_transporte', {
+      prestacion_id: prestacionId,
+      ubicacion_profesional: `POINT(${ubicacionLng} ${ubicacionLat})`,
+      radio_permitido: 50,
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    const payload = data?.[0] as ValidacionUbicacion | undefined;
+    if (!payload) {
+      throw new Error('Respuesta inválida al iniciar prestación de transporte');
+    }
+
+    return payload;
+  }
+
+  // Transporte: finalizar prestación (valida DESTINO según sentido_transporte)
+  async finalizarPrestacionTransporteConValidacion(
+    prestacionId: string,
+    ubicacionLat: number,
+    ubicacionLng: number,
+    notas?: string
+  ): Promise<ValidacionUbicacion> {
+    const isOnline = await connectivityService.isOnline();
+    if (!isOnline) {
+      const validacionOffline = await this.validarUbicacionTransporteOffline(prestacionId, ubicacionLat, ubicacionLng, 'finalizar');
+      if (validacionOffline.exito) {
+        await this.guardarPrestacionOffline({
+          prestacion_id: prestacionId,
+          accion: 'transporte_finalizar',
+          ubicacion_lat: ubicacionLat,
+          ubicacion_lng: ubicacionLng,
+          notas: notas || '',
+          timestamp: new Date().toISOString(),
+          distancia_metros: validacionOffline.distancia_metros,
+        });
+        await this.actualizarCacheTransporte(prestacionId, 'finalizar', notas);
+      }
+      return validacionOffline;
+    }
+
+    const { data, error } = await supabase.rpc('finalizar_prestacion_transporte', {
+      prestacion_id: prestacionId,
+      ubicacion_profesional: `POINT(${ubicacionLng} ${ubicacionLat})`,
+      notas_cierre: notas || null,
+      radio_permitido: 50,
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    const payload = data?.[0] as ValidacionUbicacion | undefined;
+    if (!payload) {
+      throw new Error('Respuesta inválida al finalizar prestación de transporte');
+    }
+
+    return payload;
   }
 
   // Función auxiliar para obtener el rango de fechas del día usando moment.js
@@ -239,6 +387,84 @@ class PrestacionService {
     }
   }
 
+  private async validarUbicacionTransporteOffline(
+    prestacionId: string,
+    ubicacionLat: number,
+    ubicacionLng: number,
+    accion: 'iniciar' | 'finalizar',
+    radioPermitidoDefault: number = 50
+  ): Promise<ValidacionUbicacion> {
+    const cachedData = await this.obtenerDeCache();
+    if (!cachedData) {
+      throw new Error('No hay datos en cache para validar ubicación offline');
+    }
+
+    const prestacion = cachedData.pendientes.find(p => p.prestacion_id === prestacionId);
+    if (!prestacion) {
+      throw new Error('Prestación no encontrada en cache');
+    }
+
+    const sentido = String(prestacion.sentido_transporte || '').toLowerCase();
+    const usarCentro = (accion === 'iniciar' && sentido === 'vuelta') || (accion === 'finalizar' && sentido === 'ida');
+
+    const targetLat = usarCentro ? prestacion.centro_lat : prestacion.ubicacion_paciente_lat;
+    const targetLng = usarCentro ? prestacion.centro_lng : prestacion.ubicacion_paciente_lng;
+    if (typeof targetLat !== 'number' || typeof targetLng !== 'number') {
+      throw new Error('Coordenadas inválidas para validar transporte offline');
+    }
+
+    const radioPermitido = usarCentro && typeof prestacion.centro_radio_metros === 'number'
+      ? prestacion.centro_radio_metros
+      : radioPermitidoDefault;
+
+    const distancia = this.calcularDistancia(ubicacionLat, ubicacionLng, targetLat, targetLng);
+    const dentroDelRango = distancia <= radioPermitido;
+
+    return {
+      exito: dentroDelRango,
+      mensaje: dentroDelRango
+        ? (accion === 'iniciar'
+          ? 'Prestación iniciada offline - se sincronizará automáticamente'
+          : 'Prestación finalizada offline - se sincronizará automáticamente')
+        : `Estás muy lejos del lugar de la prestación. Distancia actual: ${Math.round(distancia)}m (máximo permitido: ${Math.round(radioPermitido)}m)`,
+      distancia_metros: distancia,
+      prestacion_actualizada: dentroDelRango ? {
+        id: prestacionId,
+        estado: accion === 'iniciar' ? 'en_proceso' : 'completada',
+      } : undefined
+    };
+  }
+
+  private async actualizarCacheTransporte(
+    prestacionId: string,
+    accion: 'iniciar' | 'finalizar',
+    notas?: string
+  ): Promise<void> {
+    const cachedData = await this.obtenerDeCache();
+    if (!cachedData) return;
+
+    const pendientes = [...cachedData.pendientes];
+    const completadas = [...cachedData.completadas];
+    const idx = pendientes.findIndex(p => p.prestacion_id === prestacionId);
+    if (idx === -1) return;
+
+    const p = { ...pendientes[idx] };
+    if (accion === 'iniciar') {
+      p.estado = 'en_proceso';
+      p.started_at = new Date().toISOString();
+      pendientes[idx] = p;
+    } else {
+      p.estado = 'completada';
+      if (typeof notas === 'string') {
+        p.notas = notas;
+      }
+      pendientes.splice(idx, 1);
+      completadas.unshift(p);
+    }
+
+    await this.guardarEnCache({ pendientes, completadas });
+  }
+
   // Obtener prestaciones de la última semana (por defecto)
   async obtenerPrestacionesUltimaSemana(userId?: string, forceRefresh: boolean = false): Promise<{
     pendientes: PrestacionCompleta[];
@@ -251,6 +477,71 @@ class PrestacionService {
     const finHoy = ahora.clone().endOf('day').toDate();
 
     return this.obtenerPrestacionesPorRango(hace7Dias, finHoy, userId);
+  }
+
+  async obtenerViajesTransporteChoferPorRango(
+    choferUserId: string,
+    fechaInicio: Date,
+    fechaFin: Date
+  ): Promise<{
+    pendientes: PrestacionCompleta[];
+    completadas: PrestacionCompleta[];
+    isFromCache: boolean;
+    isOffline: boolean;
+  }> {
+    const isOnline = await connectivityService.isOnline();
+    if (!isOnline) {
+      throw new Error('Sin conexión: el listado de viajes asignados requiere internet.');
+    }
+
+    const inicioArgentina = moment(fechaInicio).tz(this.TIMEZONE).startOf('day');
+    const finArgentina = moment(fechaFin).tz(this.TIMEZONE).endOf('day');
+
+    const inicioUTC = inicioArgentina.clone().utc().toISOString();
+    const finUTC = finArgentina.clone().utc().toISOString();
+
+    const { data: prestaciones, error } = await supabase.rpc('obtener_viajes_transporte_chofer', {
+      p_chofer_id: choferUserId,
+      p_fecha_inicio: inicioUTC,
+      p_fecha_fin: finUTC,
+    });
+
+    if (error) throw error;
+
+    const prestacionesCompletas: PrestacionCompleta[] = (prestaciones || []).map((p: any) => {
+      return {
+        prestacion_id: p.id,
+        descripcion: p.descripcion || `${p.tipo_prestacion} - ${p.paciente_nombre} ${p.paciente_apellido}`,
+        fecha: p.fecha,
+        monto: p.monto,
+        paciente_nombre: `${p.paciente_nombre} ${p.paciente_apellido}`,
+        paciente_direccion: p.paciente_direccion_completa,
+        paciente_telefono: p.paciente_telefono,
+        ubicacion_paciente_lat: p.paciente_lat || 0,
+        ubicacion_paciente_lng: p.paciente_lng || 0,
+        paciente_tiene_ubicacion_sugerida: Boolean(p.paciente_tiene_ubicacion_sugerida),
+        obra_social: p.obra_social_nombre || '',
+        estado: p.estado,
+        tipo_prestacion: p.tipo_prestacion,
+        chofer_user_id: p.chofer_user_id ?? null,
+        sentido_transporte: p.sentido_transporte || undefined,
+        centro_id: p.centro_id || undefined,
+        centro_nombre: p.centro_nombre || undefined,
+        centro_direccion: p.centro_direccion_completa || undefined,
+        centro_lat: typeof p.centro_lat === 'number' ? p.centro_lat : undefined,
+        centro_lng: typeof p.centro_lng === 'number' ? p.centro_lng : undefined,
+        centro_radio_metros: typeof p.centro_radio_metros === 'number' ? p.centro_radio_metros : undefined,
+        centro_tiene_ubicacion_sugerida: Boolean(p.centro_tiene_ubicacion_sugerida),
+        started_at: p.started_at || undefined,
+        notas: p.notas || undefined,
+        paciente_id: p.paciente_id,
+      };
+    });
+
+    const pendientes = prestacionesCompletas.filter((p) => p.estado === 'pendiente' || p.estado === 'en_proceso');
+    const completadas = prestacionesCompletas.filter((p) => p.estado === 'completada');
+
+    return { pendientes, completadas, isFromCache: false, isOffline: false };
   }
 
   // Obtener prestaciones del día actual con sistema de cache inteligente
@@ -302,7 +593,7 @@ class PrestacionService {
         - UTC: ${inicioDelDiaUTC} a ${finDelDiaUTC}`);
 
       // Query usando RPC para obtener coordenadas extraídas
-      const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_con_coordenadas', {
+      const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_con_coordenadas_v2', {
         p_user_id: currentUserId,
         p_fecha_inicio: inicioDelDiaUTC,
         p_fecha_fin: finDelDiaUTC
@@ -325,15 +616,26 @@ class PrestacionService {
           paciente_telefono: p.paciente_telefono,
           ubicacion_paciente_lat: p.paciente_lat || 0,
           ubicacion_paciente_lng: p.paciente_lng || 0,
-          obra_social: p.obra_social_nombre || 'Sin obra social',
+          paciente_tiene_ubicacion_sugerida: Boolean(p.paciente_tiene_ubicacion_sugerida),
+          obra_social: p.obra_social_nombre || '',
           estado: p.estado,
           tipo_prestacion: p.tipo_prestacion,
+          chofer_user_id: p.chofer_user_id ?? null,
+          sentido_transporte: p.sentido_transporte || undefined,
+          centro_id: p.centro_id || undefined,
+          centro_nombre: p.centro_nombre || undefined,
+          centro_direccion: p.centro_direccion_completa || undefined,
+          centro_lat: typeof p.centro_lat === 'number' ? p.centro_lat : undefined,
+          centro_lng: typeof p.centro_lng === 'number' ? p.centro_lng : undefined,
+          centro_radio_metros: typeof p.centro_radio_metros === 'number' ? p.centro_radio_metros : undefined,
+          centro_tiene_ubicacion_sugerida: Boolean(p.centro_tiene_ubicacion_sugerida),
+          started_at: p.started_at || undefined,
           notas: p.notas || undefined,
           paciente_id: p.paciente_id
         };
       });
 
-      const pendientes = prestacionesCompletas.filter(p => p.estado === 'pendiente');
+      const pendientes = prestacionesCompletas.filter(p => p.estado === 'pendiente' || p.estado === 'en_proceso');
       const completadas = prestacionesCompletas.filter(p => p.estado === 'completada');
 
       const resultado = { pendientes, completadas };
@@ -379,21 +681,40 @@ class PrestacionService {
         throw new Error('Prestación no encontrada en cache');
       }
 
+      let targetLat: number;
+      let targetLng: number;
+      let radioEfectivo = radioPermitido;
+      let ubicacionDescripcion = 'paciente';
+
+      // Si la prestación tiene centro asignado con ubicación, validar contra el centro
+      if (prestacion.centro_id && 
+          typeof prestacion.centro_lat === 'number' && 
+          typeof prestacion.centro_lng === 'number') {
+        targetLat = prestacion.centro_lat;
+        targetLng = prestacion.centro_lng;
+        radioEfectivo = prestacion.centro_radio_metros || radioPermitido;
+        ubicacionDescripcion = prestacion.centro_nombre || 'centro';
+      } else {
+        // Validar contra la ubicación del paciente
+        targetLat = prestacion.ubicacion_paciente_lat;
+        targetLng = prestacion.ubicacion_paciente_lng;
+      }
+
       // Calcular distancia
       const distancia = this.calcularDistancia(
         ubicacionLat,
         ubicacionLng,
-        prestacion.ubicacion_paciente_lat,
-        prestacion.ubicacion_paciente_lng
+        targetLat,
+        targetLng
       );
 
-      const dentroDelRango = distancia <= radioPermitido;
+      const dentroDelRango = distancia <= radioEfectivo;
 
       return {
         exito: dentroDelRango,
         mensaje: dentroDelRango
           ? 'Prestación completada offline - se sincronizará automáticamente'
-          : `Estás muy lejos del lugar de la prestación. Distancia actual: ${Math.round(distancia)}m (máximo permitido: ${radioPermitido}m)`,
+          : `Estás muy lejos del ${ubicacionDescripcion}. Distancia actual: ${Math.round(distancia)}m (máximo permitido: ${radioEfectivo}m)`,
         distancia_metros: distancia,
         prestacion_actualizada: dentroDelRango ? {
           id: prestacionId,
@@ -521,6 +842,10 @@ class PrestacionService {
       const prestacionesOffline = await AsyncStorage.getItem(this.OFFLINE_KEY);
       const lista = prestacionesOffline ? JSON.parse(prestacionesOffline) : [];
 
+      if (!prestacion.accion) {
+        prestacion.accion = 'cerrar';
+      }
+
       // Evitar duplicados
       const existe = lista.find((p: PrestacionOffline) => p.prestacion_id === prestacion.prestacion_id);
       if (!existe) {
@@ -632,12 +957,28 @@ class PrestacionService {
 
       for (const prestacion of lista) {
         try {
-          const resultado = await this.cerrarPrestacionConValidacion(
-            prestacion.prestacion_id,
-            prestacion.ubicacion_lat,
-            prestacion.ubicacion_lng,
-            prestacion.notas
-          );
+          let resultado: ValidacionUbicacion;
+          if (prestacion.accion === 'transporte_iniciar') {
+            resultado = await this.iniciarPrestacionTransporteConValidacion(
+              prestacion.prestacion_id,
+              prestacion.ubicacion_lat,
+              prestacion.ubicacion_lng
+            );
+          } else if (prestacion.accion === 'transporte_finalizar') {
+            resultado = await this.finalizarPrestacionTransporteConValidacion(
+              prestacion.prestacion_id,
+              prestacion.ubicacion_lat,
+              prestacion.ubicacion_lng,
+              prestacion.notas
+            );
+          } else {
+            resultado = await this.cerrarPrestacionConValidacion(
+              prestacion.prestacion_id,
+              prestacion.ubicacion_lat,
+              prestacion.ubicacion_lng,
+              prestacion.notas
+            );
+          }
 
           // Solo contar como sincronizada si fue exitosa
           if (resultado.exito) {
@@ -827,7 +1168,7 @@ class PrestacionService {
         - UTC: ${inicioUTC} a ${finUTC}`);
 
       // Query usando RPC para obtener coordenadas extraídas
-      const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_con_coordenadas', {
+      const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_con_coordenadas_v2', {
         p_user_id: currentUserId,
         p_fecha_inicio: inicioUTC,
         p_fecha_fin: finUTC
@@ -850,15 +1191,26 @@ class PrestacionService {
           paciente_telefono: p.paciente_telefono,
           ubicacion_paciente_lat: p.paciente_lat || 0,
           ubicacion_paciente_lng: p.paciente_lng || 0,
-          obra_social: p.obra_social_nombre || 'Sin obra social',
+          paciente_tiene_ubicacion_sugerida: Boolean(p.paciente_tiene_ubicacion_sugerida),
+          obra_social: p.obra_social_nombre || '',
           estado: p.estado,
           tipo_prestacion: p.tipo_prestacion,
+          chofer_user_id: p.chofer_user_id ?? null,
+          sentido_transporte: p.sentido_transporte || undefined,
+          centro_id: p.centro_id || undefined,
+          centro_nombre: p.centro_nombre || undefined,
+          centro_direccion: p.centro_direccion_completa || undefined,
+          centro_lat: typeof p.centro_lat === 'number' ? p.centro_lat : undefined,
+          centro_lng: typeof p.centro_lng === 'number' ? p.centro_lng : undefined,
+          centro_radio_metros: typeof p.centro_radio_metros === 'number' ? p.centro_radio_metros : undefined,
+          centro_tiene_ubicacion_sugerida: Boolean(p.centro_tiene_ubicacion_sugerida),
+          started_at: p.started_at || undefined,
           notas: p.notas || undefined,
           paciente_id: p.paciente_id
         };
       });
 
-      const pendientes = prestacionesCompletas.filter(p => p.estado === 'pendiente');
+      const pendientes = prestacionesCompletas.filter(p => p.estado === 'pendiente' || p.estado === 'en_proceso');
       const completadas = prestacionesCompletas.filter(p => p.estado === 'completada');
 
       // Si el rango incluye el día actual, actualizar cache
@@ -900,6 +1252,136 @@ class PrestacionService {
     return this.obtenerPrestacionesPorRango(inicioMes, finMes, userId);
   }
 
+  // ==================== VALIDACIÓN GRUPAL EN CENTROS ====================
+
+  // Obtener prestaciones pendientes de un centro para el usuario actual
+  async obtenerPrestacionesPendientesCentro(centroId: string): Promise<{
+    prestaciones: Array<{
+      prestacion_id: string;
+      paciente_id: string;
+      paciente_nombre: string;
+      paciente_apellido: string;
+      fecha: string;
+      estado: string;
+      tipo_prestacion: string;
+    }>;
+    error?: string;
+  }> {
+    try {
+      const { data, error } = await supabase.rpc('obtener_prestaciones_pendientes_centro', {
+        p_centro_id: centroId
+      });
+
+      if (error) {
+        console.error('Error obteniendo prestaciones del centro:', error);
+        return { prestaciones: [], error: error.message };
+      }
+
+      return { prestaciones: data || [] };
+    } catch (error: any) {
+      console.error('Error obteniendo prestaciones del centro:', error);
+      return { prestaciones: [], error: error?.message || 'Error desconocido' };
+    }
+  }
+
+  // Validar múltiples prestaciones de un centro con una sola geolocalización
+  async validarPrestacionesCentro(
+    prestacionIds: string[],
+    ubicacionLat: number,
+    ubicacionLng: number,
+    radioPermitidoMetros: number = 100
+  ): Promise<{
+    exito: boolean;
+    mensaje: string;
+    prestaciones_validadas?: number;
+    distancia_metros?: number;
+    centro_id?: string;
+  }> {
+    try {
+      const isOnline = await connectivityService.isOnline();
+
+      if (!isOnline) {
+        return {
+          exito: false,
+          mensaje: 'La validación grupal requiere conexión a internet'
+        };
+      }
+
+      console.log('📍 Validando prestaciones centro con:', {
+        prestacionIds,
+        ubicacionLat,
+        ubicacionLng,
+        radioPermitidoMetros
+      });
+
+      const { data, error } = await supabase.rpc('validar_prestaciones_centro', {
+        p_prestacion_ids: prestacionIds,
+        p_ubicacion_lat: ubicacionLat,
+        p_ubicacion_lng: ubicacionLng,
+        p_radio_permitido_metros: radioPermitidoMetros
+      });
+
+      console.log('📍 Resultado validación centro:', data);
+
+      if (error) {
+        console.error('Error validando prestaciones del centro:', error);
+        return {
+          exito: false,
+          mensaje: error.message || 'Error al validar prestaciones'
+        };
+      }
+
+      // Actualizar cache después de validación exitosa
+      if (data?.exito) {
+        await this.obtenerPrestacionesDelDia(undefined, true);
+      }
+
+      return data;
+    } catch (error: any) {
+      console.error('Error validando prestaciones del centro:', error);
+      return {
+        exito: false,
+        mensaje: error?.message || 'Error desconocido'
+      };
+    }
+  }
+
+  // Obtener centros con prestaciones pendientes para el día actual
+  async obtenerCentrosConPrestacionesPendientes(): Promise<Array<{
+    centro_id: string;
+    centro_nombre: string;
+    prestaciones_pendientes: number;
+  }>> {
+    try {
+      const { pendientes } = await this.obtenerPrestacionesDelDia();
+
+      // Agrupar por centro
+      const centrosMap = new Map<string, { nombre: string; count: number }>();
+
+      for (const p of pendientes) {
+        if (p.centro_id && p.centro_nombre && p.tipo_prestacion !== 'Transporte') {
+          const existing = centrosMap.get(p.centro_id);
+          if (existing) {
+            existing.count++;
+          } else {
+            centrosMap.set(p.centro_id, { nombre: p.centro_nombre, count: 1 });
+          }
+        }
+      }
+
+      return Array.from(centrosMap.entries()).map(([id, { nombre, count }]) => ({
+        centro_id: id,
+        centro_nombre: nombre,
+        prestaciones_pendientes: count
+      }));
+    } catch (error) {
+      console.error('Error obteniendo centros con prestaciones:', error);
+      return [];
+    }
+  }
+
+  // ==================== FIN VALIDACIÓN GRUPAL ====================
+
   // Obtener prestaciones pendientes del día anterior (programadas para ayer pero no completadas)
   // Nota: Estas prestaciones aún pueden completarse ya que tienen hasta 1 semana desde la fecha programada
   async obtenerPrestacionesPerdidasAyer(userId?: string): Promise<PrestacionCompleta[]> {
@@ -933,7 +1415,7 @@ class PrestacionService {
         - UTC: ${inicioAyerUTC} a ${finAyerUTC}`);
 
       // Query usando RPC para obtener coordenadas extraídas
-      const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_con_coordenadas', {
+      const { data: prestaciones, error } = await supabase.rpc('obtener_prestaciones_con_coordenadas_v2', {
         p_user_id: currentUserId,
         p_fecha_inicio: inicioAyerUTC,
         p_fecha_fin: finAyerUTC
@@ -959,7 +1441,8 @@ class PrestacionService {
             paciente_telefono: p.paciente_telefono,
             ubicacion_paciente_lat: p.paciente_lat || 0,
             ubicacion_paciente_lng: p.paciente_lng || 0,
-            obra_social: p.obra_social_nombre || 'Sin obra social',
+            paciente_tiene_ubicacion_sugerida: Boolean(p.paciente_tiene_ubicacion_sugerida),
+            obra_social: p.obra_social_nombre || '',
             estado: p.estado,
             tipo_prestacion: p.tipo_prestacion,
             notas: p.notas || undefined,

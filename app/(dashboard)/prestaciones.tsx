@@ -1,8 +1,9 @@
-import { Session } from '@supabase/supabase-js';
+ import { Session } from '@supabase/supabase-js';
 import { router } from 'expo-router';
 import {
   CheckCircle,
   Clock,
+  Loader2,
   MapPin,
   Phone,
   Wifi,
@@ -10,13 +11,16 @@ import {
   Search
 } from 'lucide-react-native';
 import moment from 'moment-timezone';
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { Linking, Platform, RefreshControl, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import CompletarPrestacionModal from '../../components/CompletarPrestacionModal';
+import CentrosConPrestaciones from '../../components/CentrosConPrestaciones';
 import {
   AlertDialog,
   AlertDialogAction,
+  AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
@@ -32,7 +36,9 @@ import { Input } from '../../components/ui/input';
 import { Badge } from '../../components/ui/badge';
 import { Separator } from '../../components/ui/separator';
 import { supabase } from '../../lib/supabase';
+import { useLocation } from '../../hooks/useLocation';
 import { useConnectivity } from '../../services/connectivityService';
+import { choferService } from '../../services/choferService';
 import {
   ObtenerPrestacionesMesResult,
   ObtenerPrestacionesRangoResult,
@@ -47,7 +53,9 @@ import {
 export default function PrestacionesPage() {
   const insets = useSafeAreaInsets();
   const connectivity = useConnectivity();
+  const { requestLocation } = useLocation();
   const [session, setSession] = useState<Session | null>(null);
+  const [isChoferUser, setIsChoferUser] = useState(false);
   const [prestacionesPendientes, setPrestacionesPendientes] = useState<PrestacionCompleta[]>([]);
   const [prestacionesCompletadas, setPrestacionesCompletadas] = useState<PrestacionCompleta[]>([]);
   const [prestacionesPendientesHoy, setPrestacionesPendientesHoy] = useState<PrestacionCompleta[]>([]);
@@ -71,6 +79,14 @@ export default function PrestacionesPage() {
   const [errorModalOpen, setErrorModalOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
+  const [suggestingLocationId, setSuggestingLocationId] = useState<string | null>(null);
+
+  const [confirmSuggestOpen, setConfirmSuggestOpen] = useState(false);
+  const [prestacionParaSugerir, setPrestacionParaSugerir] = useState<PrestacionCompleta | null>(null);
+
+  const esPrestacionTransporte = (prestacion: PrestacionCompleta) =>
+    String(prestacion.tipo_prestacion || '').toLowerCase() === 'transporte';
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
@@ -91,6 +107,13 @@ export default function PrestacionesPage() {
 
   useEffect(() => {
     if (session) {
+      choferService
+        .isChofer()
+        .then((isC) => {
+          setIsChoferUser(isC);
+          if (isC) router.replace('/(dashboard)/transporte');
+        })
+        .catch(() => setIsChoferUser(false));
       loadPrestaciones();
       checkPrestacionesOffline();
     }
@@ -102,6 +125,30 @@ export default function PrestacionesPage() {
       loadPrestaciones();
     }
   }, [dateFilter, customDateRange]);
+
+  // Refrescar automáticamente al volver a enfocar la pantalla
+  useFocusEffect(
+    useCallback(() => {
+      if (session) {
+        setRefreshing(true);
+        (async () => {
+          try {
+            if (connectivity.isConnected) {
+              const sincronizadas: SincronizacionResult = await prestacionService.sincronizarPrestacionesOffline();
+              if (sincronizadas > 0) {
+                setSuccessMessage(`Se sincronizaron ${sincronizadas} prestaciones offline`);
+                setSuccessModalOpen(true);
+              }
+            }
+            await loadPrestaciones(true);
+            await checkPrestacionesOffline();
+          } finally {
+            setRefreshing(false);
+          }
+        })();
+      }
+    }, [session, dateFilter, customDateRange])
+  );
 
   const loadPrestaciones = async (forceRefresh: boolean = false) => {
     try {
@@ -150,17 +197,17 @@ export default function PrestacionesPage() {
         }
       }
 
-      setPrestacionesPendientes(resultado.pendientes);
-      setPrestacionesCompletadas(resultado.completadas);
+      setPrestacionesPendientes((resultado.pendientes || []).filter((p) => !esPrestacionTransporte(p)));
+      setPrestacionesCompletadas((resultado.completadas || []).filter((p) => !esPrestacionTransporte(p)));
 
       // Si el filtro es "today", guardar pendientes de hoy
       if (dateFilter === 'today') {
-        setPrestacionesPendientesHoy(resultado.pendientes);
+        setPrestacionesPendientesHoy((resultado.pendientes || []).filter((p) => !esPrestacionTransporte(p)));
       } else {
         // Si no es "today", cargar las de hoy por separado para el contador
         try {
           const datosHoy = await prestacionService.obtenerPrestacionesDelDia(undefined, false);
-          setPrestacionesPendientesHoy(datosHoy.pendientes);
+          setPrestacionesPendientesHoy((datosHoy.pendientes || []).filter((p) => !esPrestacionTransporte(p)));
         } catch (error) {
           console.log('No se pudieron cargar prestaciones de hoy para el contador');
         }
@@ -184,6 +231,47 @@ export default function PrestacionesPage() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  };
+
+  const sugerirUbicacion = async (prestacion: PrestacionCompleta) => {
+    try {
+      if (prestacion.paciente_tiene_ubicacion_sugerida) {
+        setErrorMessage('Ya existe una ubicación sugerida pendiente para este paciente. Esperá a que sea revisada.');
+        setErrorModalOpen(true);
+        return;
+      }
+
+      setSuggestingLocationId(prestacion.prestacion_id);
+
+      const ubicacion = await requestLocation();
+      if (!ubicacion) {
+        setErrorMessage('No se pudo obtener tu ubicación. Verificá GPS y permisos.');
+        setErrorModalOpen(true);
+        return;
+      }
+
+      const resultado = await prestacionService.sugerirUbicacionDesdePrestacion(
+        prestacion.prestacion_id,
+        ubicacion.latitude,
+        ubicacion.longitude,
+        typeof ubicacion.accuracy === 'number' ? Math.round(ubicacion.accuracy) : null
+      );
+
+      if (resultado.exito) {
+        setSuccessMessage(resultado.mensaje || 'Sugerencia de ubicación enviada');
+        setSuccessModalOpen(true);
+        await loadPrestaciones(false);
+      } else {
+        setErrorMessage(resultado.mensaje || 'No se pudo enviar la sugerencia de ubicación');
+        setErrorModalOpen(true);
+      }
+    } catch (e) {
+      console.error('Error sugiriendo ubicación (prestaciones):', e);
+      setErrorMessage('No se pudo enviar la sugerencia de ubicación. Intenta nuevamente.');
+      setErrorModalOpen(true);
+    } finally {
+      setSuggestingLocationId(null);
     }
   };
 
@@ -230,6 +318,13 @@ export default function PrestacionesPage() {
 
   const handlePrestacionPress = (prestacion: PrestacionCompleta) => {
     console.log(prestacion.prestacion_id)
+
+    if (esPrestacionTransporte(prestacion)) {
+      setErrorMessage('Esta prestación de transporte debe validarse desde la pantalla Transporte.');
+      setErrorModalOpen(true);
+      return;
+    }
+
     if (prestacion.estado === 'pendiente') {
       setPrestacionSeleccionada(prestacion);
       setModalVisible(true);
@@ -237,7 +332,8 @@ export default function PrestacionesPage() {
   };
 
   const handleModalSuccess = () => {
-    loadPrestaciones();
+    // Forzar refresh desde backend para evitar datos cacheados
+    loadPrestaciones(true);
     checkPrestacionesOffline();
   };
 
@@ -317,6 +413,13 @@ export default function PrestacionesPage() {
     const hace7Dias = ahora.clone().subtract(7, 'days').startOf('day');
 
     return fechaPrestacion.isSameOrAfter(hace7Dias) && fechaPrestacion.isSameOrBefore(ahora);
+  };
+
+  // Verificar si una prestación tiene fecha futura (no se puede completar aún)
+  const esFechaFutura = (fecha: string) => {
+    const fechaPrestacion = moment.tz(fecha, 'America/Argentina/Buenos_Aires').startOf('day');
+    const hoy = prestacionService.obtenerFechaActualArgentina().startOf('day');
+    return fechaPrestacion.isAfter(hoy);
   };
 
   // Obtener badge de urgencia para una prestación
@@ -521,9 +624,14 @@ export default function PrestacionesPage() {
 
 
 
+        {/* Centros con Prestaciones Pendientes - Solo muestra si hay centros */}
+        <View className="mx-6 mt-4">
+          <CentrosConPrestaciones refreshTrigger={refreshing ? 1 : 0} />
+        </View>
+
         {/* Prestaciones Offline */}
         {prestacionesOffline > 0 && (
-          <Card className="mx-6 mb-3 mt-4 border-amber-500 bg-amber-50">
+          <Card className="mx-6 mb-3 border-amber-500 bg-amber-50">
             <CardContent className="flex-row items-center gap-3 p-4">
               <WifiOff size={20} className="text-amber-600" />
               <View className="flex-1">
@@ -611,35 +719,37 @@ export default function PrestacionesPage() {
                       className={`mb-3 ${isPrestacionVencida(prestacion.fecha) ? 'border-amber-500 bg-amber-50' : ''}`}
                     >
                       <CardHeader className="pb-3">
-                        <View className="flex-row justify-between items-start">
-                          <View className="flex-1">
-                            <View className="flex-row items-center gap-2 mb-1">
-                              <Text variant="large" className="font-semibold">
-                                {prestacion.tipo_prestacion.charAt(0).toUpperCase() + prestacion.tipo_prestacion.slice(1)}
-                              </Text>
-                              {urgencia && (
-                                <Badge className={urgencia.color}>
-                                  <Text variant="small" className="font-semibold">
-                                    {urgencia.label}
-                                  </Text>
-                                </Badge>
-                              )}
-                            </View>
+                        <View className="flex-row justify-between items-start gap-2">
+                          <View className="flex-1 flex-shrink">
+                            <Text variant="large" className="font-semibold" numberOfLines={2}>
+                              {prestacion.tipo_prestacion.charAt(0).toUpperCase() + prestacion.tipo_prestacion.slice(1)}
+                            </Text>
                             <Text variant="small" className="text-muted-foreground font-medium">
                               {prestacion.paciente_nombre}
                             </Text>
                           </View>
 
-                          <View className="items-end gap-1">
-                            <View className="flex-row items-center gap-1">
-                              <Clock size={14} className="text-muted-foreground" />
-                              <Text variant="small" className="text-muted-foreground">
-                                {formatDayAndTime(prestacion.fecha)}
-                              </Text>
+                          <View className="items-end flex-shrink-0">
+                            <View className="flex-row items-center gap-2 mb-1 flex-wrap justify-end">
+                              {urgencia && (
+                                <Badge className={`${urgencia.color}`}>
+                                  <Text variant="small" className="font-semibold">
+                                    {urgencia.label}
+                                  </Text>
+                                </Badge>
+                              )}
+                              <View className="flex-row items-center gap-1">
+                                <Clock size={14} className="text-muted-foreground" />
+                                <Text variant="small" className="text-muted-foreground">
+                                  {formatDayAndTime(prestacion.fecha)}
+                                </Text>
+                              </View>
                             </View>
-                            <Text variant="small" className="font-semibold text-green-600">
-                              {formatCurrency(prestacion.monto)}
-                            </Text>
+                            {!isChoferUser ? (
+                              <Text variant="small" className="font-semibold text-green-600">
+                                {formatCurrency(prestacion.monto)}
+                              </Text>
+                            ) : null}
                           </View>
                         </View>
                       </CardHeader>
@@ -681,8 +791,18 @@ export default function PrestacionesPage() {
                       </View>
                     </Button>
 
-                    {/* Solo mostrar botón Completar si la prestación es de la última semana */}
-                    {isPrestacionDentroDeUltimaSemana(prestacion.fecha) && (
+                    {/* Botón Completar: deshabilitado si es fecha futura, oculto si está vencido */}
+                    {esFechaFutura(prestacion.fecha) ? (
+                      <Button
+                        size="sm"
+                        className="flex-2 opacity-50"
+                        disabled={true}
+                      >
+                        <Text className="text-xs text-primary-foreground font-medium">
+                          Programada
+                        </Text>
+                      </Button>
+                    ) : isPrestacionDentroDeUltimaSemana(prestacion.fecha) && (
                       <Button
                         size="sm"
                         className="flex-2"
@@ -693,6 +813,37 @@ export default function PrestacionesPage() {
                         </Text>
                       </Button>
                     )}
+                  </View>
+
+                  <View className="flex-row gap-2 items-center mt-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1"
+                      onPress={() => {
+                        setPrestacionParaSugerir(prestacion);
+                        setConfirmSuggestOpen(true);
+                      }}
+                      disabled={
+                        suggestingLocationId === prestacion.prestacion_id ||
+                        Boolean(prestacion.paciente_tiene_ubicacion_sugerida)
+                      }
+                    >
+                      <View className="flex-row items-center gap-2">
+                        {suggestingLocationId === prestacion.prestacion_id ? (
+                          <Loader2 size={14} color="#6b7280" />
+                        ) : (
+                          <MapPin size={14} color="#6b7280" />
+                        )}
+                        <Text className="text-xs">
+                          {suggestingLocationId === prestacion.prestacion_id
+                            ? 'Sugiriendo...'
+                            : prestacion.paciente_tiene_ubicacion_sugerida
+                              ? 'Sugerencia pendiente'
+                              : 'Sugerir ubicación'}
+                        </Text>
+                      </View>
+                    </Button>
                   </View>
                 </CardContent>
               </Card>
@@ -756,13 +907,21 @@ export default function PrestacionesPage() {
                     </View>
 
                     <View className="items-end gap-2">
+                      <View className="flex-row items-center gap-1">
+                        <Clock size={14} className="text-muted-foreground" />
+                        <Text variant="small" className="text-muted-foreground">
+                          {formatDayAndTime(prestacion.fecha)}
+                        </Text>
+                      </View>
                       <Badge variant="default" className="flex-row items-center gap-1">
                         <CheckCircle size={12} className="text-primary-foreground" />
                         <Text className="text-xs text-primary-foreground font-medium">Completada</Text>
                       </Badge>
-                      <Text variant="small" className="font-semibold text-green-600">
-                        {formatCurrency(prestacion.monto)}
-                      </Text>
+                      {!isChoferUser ? (
+                        <Text variant="small" className="font-semibold text-green-600">
+                          {formatCurrency(prestacion.monto)}
+                        </Text>
+                      ) : null}
                     </View>
                   </View>
                 </CardHeader>
@@ -778,7 +937,6 @@ export default function PrestacionesPage() {
                       {prestacion.paciente_direccion}
                     </Text>
                   </View>
-
                 </CardContent>
               </Card>
             )))}
@@ -823,6 +981,33 @@ export default function PrestacionesPage() {
           <AlertDialogFooter>
             <AlertDialogAction onPress={() => setErrorModalOpen(false)}>
               <Text>OK</Text>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmSuggestOpen} onOpenChange={setConfirmSuggestOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirmar sugerencia</AlertDialogTitle>
+            <AlertDialogDescription>
+              ¿Confirmás enviar tu ubicación actual como sugerencia para este paciente?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>
+              <Text>Cancelar</Text>
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onPress={async () => {
+                if (prestacionParaSugerir) {
+                  setConfirmSuggestOpen(false);
+                  await sugerirUbicacion(prestacionParaSugerir);
+                  setPrestacionParaSugerir(null);
+                }
+              }}
+            >
+              <Text>Confirmar</Text>
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -23,6 +23,9 @@ import {
 } from '@/components/ui/select';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Text } from '@/components/ui/text';
+import { supabase } from '../../lib/supabase';
+import { useConnectivity } from '../../services/connectivityService';
+import { choferService } from '../../services/choferService';
 import { reporteService, type ReporteData, type PacienteReporte } from '@/services/reporteService';
 import { ChevronDown, ChevronUp } from 'lucide-react-native';
 import { File as FSFile, Paths, EncodingType } from 'expo-file-system';
@@ -40,13 +43,50 @@ import {
     Image
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
+import { Session } from '@supabase/supabase-js';
+import { router } from 'expo-router';
 
 const TIMEZONE =
     process.env.EXPO_PUBLIC_TIMEZONE || 'America/Argentina/Buenos_Aires';
 
-export default function ReportesScreen() {
+export default function ReportesPage() {
     const insets = useSafeAreaInsets();
+    const [session, setSession] = useState<Session | null>(null);
+    const [isChoferUser, setIsChoferUser] = useState(false);
+
+    useEffect(() => {
+        supabase.auth.getSession().then(({ data: { session } }) => {
+            setSession(session);
+            if (!session) {
+                router.replace('/');
+            }
+        });
+
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+            setSession(session);
+            if (!session) {
+                router.replace('/');
+            }
+        });
+
+        return () => subscription.unsubscribe();
+    }, []);
+
+    useEffect(() => {
+        if (session) {
+            choferService
+                .isChofer()
+                .then((isC) => {
+                    setIsChoferUser(isC);
+                    if (isC) router.replace('/(dashboard)/transporte');
+                })
+                .catch(() => setIsChoferUser(false));
+        }
+    }, [session]);
+
+    if (isChoferUser) {
+        return null;
+    }
 
     // Filtro de fecha (por defecto: mes actual)
     const [dateFilter, setDateFilter] = useState<DateFilterType>('month');
@@ -116,6 +156,7 @@ export default function ReportesScreen() {
         };
         cargarPacientes();
     }, []);
+
 
     const showAlert = (title: string, message: string) => {
         setAlertTitle(title);
@@ -612,9 +653,11 @@ export default function ReportesScreen() {
                                     <Text variant="small" className="font-semibold">
                                         Monto Total:
                                     </Text>
-                                    <Text variant="large" className="font-bold text-green-600">
-                                        {formatearMonto(reporteData.totales.monto)}
-                                    </Text>
+                                    {!isChoferUser ? (
+                                        <Text variant="large" className="font-bold text-green-600">
+                                            {formatearMonto(reporteData.totales.monto)}
+                                        </Text>
+                                    ) : null}
                                 </View>
                             </CardContent>
                         </Card>

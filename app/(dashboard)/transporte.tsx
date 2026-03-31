@@ -1,0 +1,704 @@
+import { Session } from '@supabase/supabase-js';
+import { router } from 'expo-router';
+import { Clock, Loader2, MapPin, Phone, Truck } from 'lucide-react-native';
+import moment from 'moment-timezone';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Linking, Platform, RefreshControl, ScrollView, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
+import { useLocation } from '../../hooks/useLocation';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../../components/ui/alert-dialog';
+import { Badge } from '../../components/ui/badge';
+import { Button } from '../../components/ui/button';
+import { Card, CardContent, CardHeader } from '../../components/ui/card';
+import { Skeleton } from '../../components/ui/skeleton';
+import { Text } from '../../components/ui/text';
+import { supabase } from '../../lib/supabase';
+import { PrestacionCompleta, prestacionService } from '../../services/prestacionService';
+import { useConnectivity } from '../../services/connectivityService';
+import { choferService } from '../../services/choferService';
+
+function isTransporte(p: PrestacionCompleta) {
+  return String(p.tipo_prestacion || '').toLowerCase() === 'transporte';
+}
+
+function formatDayAndTime(dateString: string) {
+  const TIMEZONE = 'America/Argentina/Buenos_Aires';
+  const fecha = moment.tz(dateString, TIMEZONE);
+  return fecha.calendar(null, {
+    sameDay: '[Hoy] HH:mm',
+    lastDay: '[Ayer] HH:mm',
+    lastWeek: 'DD/MM HH:mm',
+    sameElse: 'DD/MM HH:mm',
+  });
+}
+
+function formatSentido(sentido?: string) {
+  if (!sentido) return null;
+  if (sentido === 'ida') return 'Ida';
+  if (sentido === 'vuelta') return 'Vuelta';
+  if (sentido === 'ida_y_vuelta') return 'Ida y vuelta';
+  return sentido;
+}
+
+// Verificar si una prestación tiene fecha futura (no se puede completar aún)
+function esFechaFutura(fecha: string) {
+  const fechaPrestacion = moment.tz(fecha, 'America/Argentina/Buenos_Aires').startOf('day');
+  const hoy = prestacionService.obtenerFechaActualArgentina().startOf('day');
+  return fechaPrestacion.isAfter(hoy);
+}
+
+export default function TransportePage() {
+  const insets = useSafeAreaInsets();
+  const connectivity = useConnectivity();
+  const [session, setSession] = useState<Session | null>(null);
+  const [isTransportista, setIsTransportista] = useState<boolean>(false);
+  const [isChoferUser, setIsChoferUser] = useState<boolean>(false);
+  const [choferLabelById, setChoferLabelById] = useState<Record<string, string>>({});
+  const [pendientes, setPendientes] = useState<PrestacionCompleta[]>([]);
+  const [completadas, setCompletadas] = useState<PrestacionCompleta[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const { requestLocation } = useLocation();
+  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+  const [suggestingLocationId, setSuggestingLocationId] = useState<string | null>(null);
+
+  const [errorModalOpen, setErrorModalOpen] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+
+  const [successModalOpen, setSuccessModalOpen] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
+
+  const [confirmSuggestOpen, setConfirmSuggestOpen] = useState(false);
+  const [prestacionParaSugerir, setPrestacionParaSugerir] = useState<PrestacionCompleta | null>(null);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (!session) router.replace('/');
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (!session) router.replace('/');
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (session) {
+      choferService.isChofer().then(setIsChoferUser).catch(() => setIsChoferUser(false));
+      choferService
+        .isTransportista()
+        .then(async (isT) => {
+          setIsTransportista(isT);
+          if (isT) {
+            try {
+              const choferes = await choferService.listChoferes();
+              const map: Record<string, string> = {};
+              for (const c of choferes) {
+                const name = `${c.apellido ?? ''}${c.apellido && c.nombre ? ', ' : ''}${c.nombre ?? ''}`.trim();
+                map[c.userId] = `${name || 'Sin nombre'}${c.dni ? ` (DNI ${c.dni})` : ''}`;
+              }
+              setChoferLabelById(map);
+            } catch {
+              setChoferLabelById({});
+            }
+          } else {
+            setChoferLabelById({});
+          }
+        })
+        .catch(() => setIsTransportista(false));
+      loadData(false);
+    }
+  }, [session]);
+
+  // Refrescar automáticamente al volver a enfocar la pantalla y sincronizar offline si hay conexión
+  useFocusEffect(
+    useCallback(() => {
+      if (session) {
+        setRefreshing(true);
+        (async () => {
+          try {
+            if (connectivity.isConnected) {
+              const sincronizadas = await prestacionService.sincronizarPrestacionesOffline();
+              if (sincronizadas > 0) {
+                setSuccessMessage(`Se sincronizaron ${sincronizadas} validaciones offline`);
+                setSuccessModalOpen(true);
+              }
+            }
+            await loadData(true);
+          } finally {
+            setRefreshing(false);
+          }
+        })();
+      }
+    }, [session])
+  );
+
+  const loadData = async (forceRefresh: boolean) => {
+    try {
+      setLoading(true);
+      const isChofer = await choferService.isChofer();
+      if (isChofer) {
+        const choferId = session?.user?.id;
+        if (!choferId) {
+          setPendientes([]);
+          setCompletadas([]);
+          return;
+        }
+
+        const ahora = moment.tz('America/Argentina/Buenos_Aires');
+        const inicioMes = ahora.clone().startOf('month').toDate();
+        const finMes = ahora.clone().endOf('month').toDate();
+
+        const resultado = await prestacionService.obtenerViajesTransporteChoferPorRango(
+          choferId,
+          inicioMes,
+          finMes
+        );
+
+        setPendientes((resultado.pendientes || []).filter((p) => p.estado === 'pendiente' || p.estado === 'en_proceso'));
+        setCompletadas((resultado.completadas || []).filter((p) => p.estado === 'completada'));
+      } else {
+        const resultado = await prestacionService.obtenerPrestacionesUltimaSemana(undefined, forceRefresh);
+        const pendientesTransporte = (resultado.pendientes || []).filter(isTransporte);
+        const completadasTransporte = (resultado.completadas || []).filter(isTransporte);
+
+        setPendientes(pendientesTransporte.filter((p) => p.estado === 'pendiente' || p.estado === 'en_proceso'));
+        setCompletadas(completadasTransporte.filter((p) => p.estado === 'completada'));
+      }
+    } catch (e) {
+      console.error('Error loading transporte prestaciones:', e);
+      setErrorMessage('No se pudieron cargar las prestaciones de transporte');
+      setErrorModalOpen(true);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    if (connectivity.isConnected) {
+      try {
+        const sincronizadas = await prestacionService.sincronizarPrestacionesOffline();
+        if (sincronizadas > 0) {
+          setSuccessMessage(`Se sincronizaron ${sincronizadas} validaciones offline`);
+          setSuccessModalOpen(true);
+        }
+      } catch (e) {
+        console.error('Error en sincronización offline transporte:', e);
+      }
+      await loadData(true);
+    } else {
+      await loadData(false);
+    }
+  };
+
+  const handleIniciar = async (prestacion: PrestacionCompleta) => {
+    try {
+      setActionLoadingId(prestacion.prestacion_id);
+      const ubicacion = await requestLocation();
+      if (!ubicacion) {
+        setErrorMessage('No se pudo obtener tu ubicación. Verificá GPS y permisos.');
+        setErrorModalOpen(true);
+        return;
+      }
+
+      const resultado = await prestacionService.iniciarPrestacionTransporteConValidacion(
+        prestacion.prestacion_id,
+        ubicacion.latitude,
+        ubicacion.longitude
+      );
+
+      if (resultado.exito) {
+        setSuccessMessage(resultado.mensaje || 'Prestación iniciada');
+        setSuccessModalOpen(true);
+        await loadData(false);
+      } else {
+        setErrorMessage(resultado.mensaje || 'No se pudo iniciar la prestación');
+        setErrorModalOpen(true);
+      }
+    } catch (e) {
+      console.error('Error iniciando prestación transporte:', e);
+      setErrorMessage('No se pudo iniciar la prestación');
+      setErrorModalOpen(true);
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  const handleFinalizar = async (prestacion: PrestacionCompleta) => {
+    try {
+      setActionLoadingId(prestacion.prestacion_id);
+      const ubicacion = await requestLocation();
+      if (!ubicacion) {
+        setErrorMessage('No se pudo obtener tu ubicación. Verificá GPS y permisos.');
+        setErrorModalOpen(true);
+        return;
+      }
+
+      const resultado = await prestacionService.finalizarPrestacionTransporteConValidacion(
+        prestacion.prestacion_id,
+        ubicacion.latitude,
+        ubicacion.longitude,
+        undefined
+      );
+
+      if (resultado.exito) {
+        setSuccessMessage(resultado.mensaje || 'Prestación finalizada');
+        setSuccessModalOpen(true);
+        await loadData(false);
+      } else {
+        setErrorMessage(resultado.mensaje || 'No se pudo finalizar la prestación');
+        setErrorModalOpen(true);
+      }
+    } catch (e) {
+      console.error('Error finalizando prestación transporte:', e);
+      setErrorMessage('No se pudo finalizar la prestación');
+      setErrorModalOpen(true);
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  const llamarPaciente = (telefono: string) => {
+    Linking.openURL(`tel:${telefono}`);
+  };
+
+  const abrirMapa = (direccion: string, lat?: number, lng?: number) => {
+    const direccionEncoded = encodeURIComponent(direccion);
+    const url = lat && lng
+      ? `https://maps.google.com/?q=${lat},${lng}+(${direccionEncoded})`
+      : `https://maps.google.com/?q=${direccionEncoded}`;
+    Linking.openURL(url);
+  };
+
+  const sugerirUbicacion = async (prestacion: PrestacionCompleta) => {
+    try {
+      const esDestino = prestacion.estado === 'en_proceso';
+      const target = prestacion.sentido_transporte === 'ida'
+        ? (esDestino ? 'centro' : 'paciente')
+        : (esDestino ? 'paciente' : 'centro');
+
+      const hasPendingSuggestion = target === 'centro'
+        ? Boolean(prestacion.centro_tiene_ubicacion_sugerida)
+        : Boolean(prestacion.paciente_tiene_ubicacion_sugerida);
+
+      if (hasPendingSuggestion) {
+        setErrorMessage('Ya existe una ubicación sugerida pendiente. Esperá a que sea revisada.');
+        setErrorModalOpen(true);
+        return;
+      }
+
+      setSuggestingLocationId(prestacion.prestacion_id);
+
+      const ubicacion = await requestLocation();
+      if (!ubicacion) {
+        setErrorMessage('No se pudo obtener tu ubicación. Verificá GPS y permisos.');
+        setErrorModalOpen(true);
+        return;
+      }
+
+      const resultado = await prestacionService.sugerirUbicacionDesdePrestacion(
+        prestacion.prestacion_id,
+        ubicacion.latitude,
+        ubicacion.longitude,
+        typeof ubicacion.accuracy === 'number' ? Math.round(ubicacion.accuracy) : null
+      );
+
+      if (resultado.exito) {
+        setSuccessMessage(resultado.mensaje || 'Sugerencia de ubicación enviada');
+        setSuccessModalOpen(true);
+        await loadData(false);
+      } else {
+        setErrorMessage(resultado.mensaje || 'No se pudo enviar la sugerencia de ubicación');
+        setErrorModalOpen(true);
+      }
+    } catch (e) {
+      console.error('Error sugiriendo ubicación (transporte):', e);
+      setErrorMessage('No se pudo enviar la sugerencia de ubicación. Intenta nuevamente.');
+      setErrorModalOpen(true);
+    } finally {
+      setSuggestingLocationId(null);
+    }
+  };
+
+  const pendientesOrdenadas = useMemo(() => {
+    return [...pendientes].sort((a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime());
+  }, [pendientes]);
+
+  const completadasOrdenadas = useMemo(() => {
+    return [...completadas].sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
+  }, [completadas]);
+
+  if (!session) return null;
+
+  return (
+    <>
+      <ScrollView
+        className="flex-1 bg-background"
+        contentContainerStyle={{
+          paddingBottom: Platform.OS === 'android' ? 70 + Math.max(insets.bottom, 0) + 20 : 90,
+        }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        <View className="p-6 pt-16 bg-card w-full">
+          <View className="flex-row items-center gap-2">
+            <Truck size={20} className="text-muted-foreground" />
+            <Text variant="h2" className="border-0 pb-0">Transporte</Text>
+          </View>
+          <Text variant="muted" className="mt-2">
+            Validá traslados pendientes (ida / vuelta)
+          </Text>
+
+          {isTransportista && !isChoferUser ? (
+            <View className="mt-4 flex-row gap-2">
+              <Button variant="outline" size="sm" className="flex-1" onPress={() => router.push('/(dashboard)/choferes')}>
+                <Text className="text-xs">Choferes</Text>
+              </Button>
+              <Button variant="outline" size="sm" className="flex-1" onPress={() => router.push('/(dashboard)/asignar-transporte')}>
+                <Text className="text-xs">Asignar viajes</Text>
+              </Button>
+            </View>
+          ) : null}
+
+          {!loading && pendientes.length > 0 ? (
+            <View className="mt-3">
+              <Badge variant="default" className="bg-amber-500 self-start">
+                <Text className="text-white text-xs font-semibold">{pendientes.length} pendientes</Text>
+              </Badge>
+            </View>
+          ) : null}
+        </View>
+
+        <View className="p-6 pt-4">
+          <Text variant="h3">Pendientes</Text>
+
+          {loading ? (
+            Array.from({ length: 3 }).map((_, idx) => (
+              <Card key={`skeleton-${idx}`} className="mb-3">
+                <CardHeader className="px-5 pt-5 pb-3">
+                  <Skeleton className="w-30 h-4" />
+                  <Skeleton className="w-25 h-3" />
+                </CardHeader>
+              </Card>
+            ))
+          ) : pendientesOrdenadas.length === 0 ? (
+            <Card className="mt-3">
+              <CardContent className="items-center py-10">
+                <Text variant="muted">No hay traslados pendientes</Text>
+              </CardContent>
+            </Card>
+          ) : (
+            pendientesOrdenadas.map((p) => {
+              const sentidoLabel = formatSentido(p.sentido_transporte);
+              const choferUserId = (p as any).chofer_user_id as string | null | undefined;
+              const assignedLabel = choferUserId ? choferLabelById[choferUserId] : null;
+              return (
+                <Card
+                  key={p.prestacion_id}
+                  className={`mb-3 ${p.estado === 'en_proceso' ? 'border-2 border-amber-500 bg-amber-50' : ''}`}
+                >
+                  <CardHeader className="pb-3">
+                    <View className="flex-row justify-between items-start">
+                      <View className="flex-1">
+                        <Text variant="large" className="font-semibold">{p.paciente_nombre}</Text>
+                        {sentidoLabel ? (
+                          <Text variant="small" className="text-muted-foreground font-medium">{sentidoLabel}</Text>
+                        ) : null}
+                        {isTransportista && assignedLabel ? (
+                          <View className="mt-2 self-start">
+                            <Badge variant="default" className="bg-blue-600">
+                              <Text className="text-white text-xs font-semibold">Chofer: {assignedLabel}</Text>
+                            </Badge>
+                          </View>
+                        ) : null}
+                      </View>
+                      <View className="items-end gap-1">
+                        {p.estado === 'en_proceso' ? (
+                          <Badge variant="default" className="bg-amber-500 self-end">
+                            <Text className="text-white text-xs font-semibold">En curso</Text>
+                          </Badge>
+                        ) : null}
+                        <View className="flex-row items-center gap-1">
+                          <Clock size={14} className="text-muted-foreground" />
+                          <Text variant="small" className="text-muted-foreground">{formatDayAndTime(p.fecha)}</Text>
+                        </View>
+                      </View>
+                    </View>
+                  </CardHeader>
+                  <CardContent className="pt-0">
+                    <Text variant="muted" className="mb-3">{p.descripcion}</Text>
+
+                    <View className="flex-row items-center gap-2 mb-3">
+                      <MapPin size={14} className="text-muted-foreground" />
+                      <Text variant="small" className="text-muted-foreground flex-1">{p.paciente_direccion}</Text>
+                    </View>
+
+                    <View className="flex-row gap-2 items-center">
+                      <Button variant="outline" size="sm" className="flex-1" onPress={() => llamarPaciente(p.paciente_telefono)}>
+                        <View className="flex-row items-center gap-1">
+                          <Phone size={14} className="text-muted-foreground" />
+                          <Text className="text-xs">Llamar</Text>
+                        </View>
+                      </Button>
+
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1"
+                        onPress={() => abrirMapa(p.paciente_direccion, p.ubicacion_paciente_lat, p.ubicacion_paciente_lng)}
+                      >
+                        <View className="flex-row items-center gap-1">
+                          <MapPin size={14} className="text-muted-foreground" />
+                          <Text className="text-xs">Mapa</Text>
+                        </View>
+                      </Button>
+
+                      {esFechaFutura(p.fecha) ? (
+                        <Button
+                          size="sm"
+                          className="flex-2 opacity-50"
+                          disabled={true}
+                        >
+                          <Text className="text-xs text-primary-foreground font-medium">Programada</Text>
+                        </Button>
+                      ) : p.estado === 'pendiente' ? (
+                        <Button
+                          size="sm"
+                          className="flex-2"
+                          disabled={actionLoadingId === p.prestacion_id}
+                          onPress={() => handleIniciar(p)}
+                        >
+                          <Text className="text-xs text-primary-foreground font-medium">Iniciar</Text>
+                        </Button>
+                      ) : p.estado === 'en_proceso' ? (
+                        <Button
+                          size="sm"
+                          className="flex-2"
+                          disabled={actionLoadingId === p.prestacion_id}
+                          onPress={() => handleFinalizar(p)}
+                        >
+                          <Text className="text-xs text-primary-foreground font-medium">Finalizar</Text>
+                        </Button>
+                      ) : null}
+                    </View>
+
+                    <View className="flex-row gap-2 items-center mt-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1"
+                        onPress={() => {
+                          setPrestacionParaSugerir(p);
+                          setConfirmSuggestOpen(true);
+                        }}
+                        disabled={
+                          suggestingLocationId === p.prestacion_id ||
+                          (() => {
+                            const esDestino = p.estado === 'en_proceso';
+                            const target = p.sentido_transporte === 'ida'
+                              ? (esDestino ? 'centro' : 'paciente')
+                              : (esDestino ? 'paciente' : 'centro');
+                            return target === 'centro'
+                              ? Boolean(p.centro_tiene_ubicacion_sugerida)
+                              : Boolean(p.paciente_tiene_ubicacion_sugerida);
+                          })()
+                        }
+                      >
+                        <View className="flex-row items-center gap-2">
+                          {suggestingLocationId === p.prestacion_id ? (
+                            <Loader2 size={14} color="#6b7280" />
+                          ) : (
+                            <MapPin size={14} color="#6b7280" />
+                          )}
+                          <Text className="text-xs">
+                            {suggestingLocationId === p.prestacion_id
+                              ? 'Sugiriendo...'
+                              : (() => {
+                                const esDestino = p.estado === 'en_proceso';
+                                const target = p.sentido_transporte === 'ida'
+                                  ? (esDestino ? 'centro' : 'paciente')
+                                  : (esDestino ? 'paciente' : 'centro');
+                                const hasPending = target === 'centro'
+                                  ? Boolean(p.centro_tiene_ubicacion_sugerida)
+                                  : Boolean(p.paciente_tiene_ubicacion_sugerida);
+                                if (hasPending) return 'Sugerencia pendiente';
+                                return esDestino ? 'Sugerir ubicación (destino)' : 'Sugerir ubicación (origen)';
+                              })()}
+                          </Text>
+                        </View>
+                      </Button>
+                    </View>
+                  </CardContent>
+                </Card>
+              );
+            })
+          )}
+
+          <View className="mt-6">
+            <Text variant="h3">Completadas</Text>
+            {!loading && completadas.length === 0 ? (
+              <Text variant="muted" className="mt-2">No hay traslados completados en el rango</Text>
+            ) : null}
+          </View>
+
+          {!loading && completadasOrdenadas.length > 0 ? (
+            <View className="mt-3">
+              {completadasOrdenadas.map((p) => {
+                const sentidoLabel = formatSentido(p.sentido_transporte);
+                const choferUserId = (p as any).chofer_user_id as string | null | undefined;
+                const assignedLabel = choferUserId ? choferLabelById[choferUserId] : null;
+                return (
+                  <Card key={p.prestacion_id} className="mb-3">
+                    <CardHeader className="pb-3">
+                      <View className="flex-row justify-between items-start">
+                        <View className="flex-1">
+                          <Text variant="large" className="font-semibold">{p.paciente_nombre}</Text>
+                          {sentidoLabel ? (
+                            <Text variant="small" className="text-muted-foreground font-medium">{sentidoLabel}</Text>
+                          ) : null}
+                          {isTransportista && assignedLabel ? (
+                            <View className="mt-2 self-start">
+                              <Badge variant="default" className="bg-blue-600">
+                                <Text className="text-white text-xs font-semibold">Chofer: {assignedLabel}</Text>
+                              </Badge>
+                            </View>
+                          ) : null}
+                        </View>
+                        <View className="items-end gap-1">
+                          <Badge variant="default" className="bg-green-600 self-end">
+                            <Text className="text-white text-xs font-semibold">Completada</Text>
+                          </Badge>
+                          <View className="flex-row items-center gap-1">
+                            <Clock size={14} className="text-muted-foreground" />
+                            <Text variant="small" className="text-muted-foreground">{formatDayAndTime(p.fecha)}</Text>
+                          </View>
+                        </View>
+                      </View>
+                    </CardHeader>
+
+                    <CardContent className="pt-0">
+                      <Text variant="muted" className="mb-3">{p.descripcion}</Text>
+
+                      <View className="flex-row items-center gap-2 mb-3">
+                        <MapPin size={14} className="text-muted-foreground" />
+                        <Text variant="small" className="text-muted-foreground flex-1">{p.paciente_direccion}</Text>
+                      </View>
+
+                      <View className="flex-row gap-2 items-center">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1"
+                          onPress={() => llamarPaciente(p.paciente_telefono)}
+                        >
+                          <View className="flex-row items-center gap-1">
+                            <Phone size={14} className="text-muted-foreground" />
+                            <Text className="text-xs">Llamar</Text>
+                          </View>
+                        </Button>
+
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1"
+                          onPress={() => abrirMapa(p.paciente_direccion, p.ubicacion_paciente_lat, p.ubicacion_paciente_lng)}
+                        >
+                          <View className="flex-row items-center gap-1">
+                            <MapPin size={14} className="text-muted-foreground" />
+                            <Text className="text-xs">Mapa</Text>
+                          </View>
+                        </Button>
+                      </View>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </View>
+          ) : null}
+        </View>
+      </ScrollView>
+
+      <AlertDialog open={errorModalOpen} onOpenChange={setErrorModalOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Error</AlertDialogTitle>
+            <AlertDialogDescription>{errorMessage}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onPress={() => setErrorModalOpen(false)}>
+              <Text>OK</Text>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={successModalOpen} onOpenChange={setSuccessModalOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Listo</AlertDialogTitle>
+            <AlertDialogDescription>{successMessage}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onPress={() => setSuccessModalOpen(false)}>
+              <Text>OK</Text>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmSuggestOpen} onOpenChange={setConfirmSuggestOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirmar sugerencia</AlertDialogTitle>
+            <AlertDialogDescription>
+              {prestacionParaSugerir
+                ? (() => {
+                  const esDestino = prestacionParaSugerir.estado === 'en_proceso';
+                  const target = prestacionParaSugerir.sentido_transporte === 'ida'
+                    ? (esDestino ? 'centro' : 'paciente')
+                    : (esDestino ? 'paciente' : 'centro');
+                  const destinoLabel = esDestino ? 'destino (finalización)' : 'origen (inicio)';
+                  const aQuien = target === 'centro'
+                    ? (prestacionParaSugerir.centro_nombre || 'centro')
+                    : 'paciente';
+                  return `Vas a sugerir la ubicación del ${destinoLabel} para ${aQuien}. ¿Confirmás?`;
+                })()
+                : '¿Confirmás enviar la sugerencia de ubicación?'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>
+              <Text>Cancelar</Text>
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onPress={async () => {
+                if (prestacionParaSugerir) {
+                  setConfirmSuggestOpen(false);
+                  await sugerirUbicacion(prestacionParaSugerir);
+                  setPrestacionParaSugerir(null);
+                }
+              }}
+            >
+              <Text>Confirmar</Text>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}

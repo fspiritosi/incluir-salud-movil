@@ -120,6 +120,7 @@ export type Database = {
       }
       prestaciones: {
         Row: {
+          chofer_user_id: string | null
           completed_at: string | null
           created_at: string | null
           cronico: boolean | null
@@ -132,12 +133,18 @@ export type Database = {
           notas: string | null
           obra_social_id: string | null
           paciente_id: string | null
+          centro_id: string | null
+          sentido_transporte: string | null
+          started_at: string | null
+          ubicacion_inicio: unknown | null
+          distancia_inicio: number | null
           tipo_prestacion: Database["public"]["Enums"]["tipo_prestacion"]
           ubicacion_cierre: unknown
           updated_at: string | null
           user_id: string | null
         }
         Insert: {
+          chofer_user_id?: string | null
           completed_at?: string | null
           created_at?: string | null
           cronico?: boolean | null
@@ -150,12 +157,18 @@ export type Database = {
           notas?: string | null
           obra_social_id?: string | null
           paciente_id?: string | null
+          centro_id?: string | null
+          sentido_transporte?: string | null
+          started_at?: string | null
+          ubicacion_inicio?: unknown | null
+          distancia_inicio?: number | null
           tipo_prestacion: Database["public"]["Enums"]["tipo_prestacion"]
           ubicacion_cierre?: unknown
           updated_at?: string | null
           user_id?: string | null
         }
         Update: {
+          chofer_user_id?: string | null
           completed_at?: string | null
           created_at?: string | null
           cronico?: boolean | null
@@ -168,6 +181,11 @@ export type Database = {
           notas?: string | null
           obra_social_id?: string | null
           paciente_id?: string | null
+          centro_id?: string | null
+          sentido_transporte?: string | null
+          started_at?: string | null
+          ubicacion_inicio?: unknown | null
+          distancia_inicio?: number | null
           tipo_prestacion?: Database["public"]["Enums"]["tipo_prestacion"]
           ubicacion_cierre?: unknown
           updated_at?: string | null
@@ -241,6 +259,7 @@ export type Database = {
           },
         ]
       }
+
       profiles: {
         Row: {
           activo: boolean | null
@@ -292,6 +311,32 @@ export type Database = {
         }
         Relationships: []
       }
+
+      transportista_choferes: {
+        Row: {
+          activo: boolean
+          chofer_user_id: string
+          created_at: string
+          transportista_id: string
+          updated_at: string
+        }
+        Insert: {
+          activo?: boolean
+          chofer_user_id: string
+          created_at?: string
+          transportista_id: string
+          updated_at?: string
+        }
+        Update: {
+          activo?: boolean
+          chofer_user_id?: string
+          created_at?: string
+          transportista_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+
       provinces: {
         Row: {
           created_at: string
@@ -733,13 +778,13 @@ export type Database = {
       obtener_prestaciones_con_coordenadas: {
         Args: { p_fecha_fin: string; p_fecha_inicio: string; p_user_id: string }
         Returns: {
-          completed_at: string
+          completed_at: string | null
           descripcion: string
           estado: Database["public"]["Enums"]["prestacion_estado"]
           fecha: string
           id: string
-          monto: number
-          notas: string
+          monto: number | null
+          notas: string | null
           obra_social_nombre: string
           paciente_apellido: string
           paciente_direccion_completa: string
@@ -749,6 +794,84 @@ export type Database = {
           paciente_nombre: string
           paciente_telefono: string
           tipo_prestacion: Database["public"]["Enums"]["tipo_prestacion"]
+          sentido_transporte: string | null
+          centro_id: string | null
+          centro_nombre: string | null
+          centro_direccion_completa: string | null
+          centro_lat: number | null
+          centro_lng: number | null
+          centro_radio_metros: number | null
+          started_at: string | null
+        }[]
+      }
+      obtener_prestaciones_con_coordenadas_v2: {
+        Args: { p_fecha_fin: string; p_fecha_inicio: string; p_user_id: string }
+        Returns: {
+          completed_at: string | null
+          descripcion: string
+          estado: Database["public"]["Enums"]["prestacion_estado"]
+          fecha: string
+          id: string
+          monto: number | null
+          notas: string | null
+          obra_social_nombre: string
+          paciente_apellido: string
+          paciente_direccion_completa: string
+          paciente_id: string
+          paciente_lat: number
+          paciente_lng: number
+          paciente_nombre: string
+          paciente_telefono: string
+          paciente_tiene_ubicacion_sugerida: boolean
+          tipo_prestacion: Database["public"]["Enums"]["tipo_prestacion"]
+          sentido_transporte: string | null
+          centro_id: string | null
+          centro_nombre: string | null
+          centro_direccion_completa: string | null
+          centro_lat: number | null
+          centro_lng: number | null
+          centro_radio_metros: number | null
+          centro_tiene_ubicacion_sugerida: boolean
+          started_at: string | null
+        }[]
+      }
+      iniciar_prestacion_transporte: {
+        Args: {
+          prestacion_id: string
+          radio_permitido?: number
+          ubicacion_profesional: unknown
+        }
+        Returns: {
+          distancia_metros: number
+          exito: boolean
+          mensaje: string
+          prestacion_actualizada: Json | null
+        }[]
+      }
+      sugerir_ubicacion_desde_prestacion: {
+        Args: {
+          p_prestacion_id: string
+          p_lat: number
+          p_lng: number
+          p_precision_m?: number
+        }
+        Returns: {
+          exito: boolean
+          mensaje: string
+        }[]
+      }
+      finalizar_prestacion_transporte: {
+        Args: {
+          prestacion_id: string
+          radio_permitido?: number
+          ubicacion_profesional: unknown
+          notas_cierre?: string
+        }
+        Returns: {
+          distancia_metros: number
+          exito: boolean
+          mensaje: string
+          prestacion_actualizada: Json | null
         }[]
       }
       obtener_prestaciones_pendientes: {
@@ -1427,6 +1550,7 @@ export type Database = {
         | "laboratorio"
         | "Acompañante Terapeutico"
         | "Kinesiología"
+        | "Transporte"
     }
     CompositeTypes: {
       geometry_dump: {

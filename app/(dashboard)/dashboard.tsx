@@ -1,9 +1,10 @@
 import { Session } from '@supabase/supabase-js';
 import { router } from 'expo-router';
-import { AlertTriangle, Building2, CheckCircle, Clock, FileText, Settings, DollarSign, PlayCircle } from 'lucide-react-native';
-import React, { useEffect, useState } from 'react';
+import { AlertTriangle, CheckCircle, Clock, FileText, Settings, DollarSign, PlayCircle } from 'lucide-react-native';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Image, Platform, RefreshControl, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent } from '../../components/ui/card';
 import { Skeleton } from '../../components/ui/skeleton';
@@ -11,6 +12,7 @@ import { Text } from '../../components/ui/text';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { supabase } from '../../lib/supabase';
 import { useConnectivity } from '../../services/connectivityService';
+import { choferService } from '../../services/choferService';
 import { PrestacionCompleta, prestacionService } from '../../services/prestacionService';
 import CompletarPrestacionModal from '../../components/CompletarPrestacionModal';
 import moment from 'moment-timezone';
@@ -19,6 +21,7 @@ export default function DashboardPage() {
     const insets = useSafeAreaInsets();
     const connectivity = useConnectivity();
     const [session, setSession] = useState<Session | null>(null);
+    const [isChoferUser, setIsChoferUser] = useState(false);
     const [prestacionesCompletadas, setPrestacionesCompletadas] = useState<PrestacionCompleta[]>([]);
     const [prestacionesPendientes, setPrestacionesPendientes] = useState<PrestacionCompleta[]>([]);
     const [prestacionesPendientesHoy, setPrestacionesPendientesHoy] = useState<PrestacionCompleta[]>([]);
@@ -51,9 +54,31 @@ export default function DashboardPage() {
 
     useEffect(() => {
         if (session) {
+            choferService
+                .isChofer()
+                .then((isC) => {
+                    setIsChoferUser(isC);
+                    if (isC) router.replace('/(dashboard)/transporte');
+                })
+                .catch(() => setIsChoferUser(false));
+        }
+    }, [session]);
+
+    useEffect(() => {
+        if (session) {
             loadDashboardData();
         }
     }, [session, filtroTemporal]);
+
+    // Refrescar automáticamente al volver a enfocar la pantalla
+    useFocusEffect(
+        useCallback(() => {
+            if (session) {
+                // Forzar datos frescos desde backend cuando regresamos
+                loadDashboardData(true);
+            }
+        }, [session, filtroTemporal])
+    );
 
     const loadDashboardData = async (forceRefresh: boolean = false) => {
         try {
@@ -198,6 +223,11 @@ export default function DashboardPage() {
         return null;
     }
 
+    if (isChoferUser) {
+        router.replace('/(dashboard)/transporte');
+        return null;
+    }
+
     const userName = session.user.user_metadata?.full_name ||
         session.user.user_metadata?.first_name ||
         session.user.email?.split('@')[0] ||
@@ -277,15 +307,14 @@ export default function DashboardPage() {
                             {loading ? (
                                 <Skeleton className="w-20 h-6" />
                             ) : (
-                                <Text variant="large" className="font-bold text-green-900">
-                                    {formatCurrency(totalMesCompletadas)}
-                                </Text>
+                                !isChoferUser ? (
+                                    <Text variant="large" className="font-bold text-green-600">
+                                        {formatCurrency(totalMesCompletadas)}
+                                    </Text>
+                                ) : null
                             )}
-                            <Text variant="small" className="text-green-700 mt-1">
-                                Solo completadas
-                            </Text>
-                        </CardContent>
-                    </Card>
+                    </CardContent>
+                </Card>
 
                     {/* Pendientes de Hoy */}
                     <Card className="flex-1 bg-amber-50 border-amber-200">
@@ -429,13 +458,6 @@ export default function DashboardPage() {
                                 <Text variant="muted" className="mb-3">
                                     {prestacion.descripcion}
                                 </Text>
-
-                                <View className="flex-row items-center gap-1 mt-1">
-                                    <Building2 size={14} className="text-muted-foreground" />
-                                    <Text variant="small" className="text-muted-foreground italic">
-                                        {prestacion.obra_social}
-                                    </Text>
-                                </View>
                             </CardContent>
                         </Card>
                     ))
@@ -527,13 +549,6 @@ export default function DashboardPage() {
                                 <Text variant="muted" className="mb-3">
                                     {prestacion.descripcion}
                                 </Text>
-
-                                <View className="flex-row items-center gap-1 mt-1">
-                                    <Building2 size={14} className="text-muted-foreground" />
-                                    <Text variant="small" className="text-muted-foreground italic">
-                                        {prestacion.obra_social}
-                                    </Text>
-                                </View>
                             </CardContent>
                         </Card>
                     ))
