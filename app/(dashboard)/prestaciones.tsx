@@ -408,8 +408,8 @@ export default function PrestacionesPage() {
   };
 
   const isPrestacionDentroDeUltimaSemana = (fecha: string) => {
-    const fechaPrestacion = moment.tz(fecha, 'America/Argentina/Buenos_Aires');
-    const ahora = prestacionService.obtenerFechaActualArgentina();
+    const fechaPrestacion = moment.tz(fecha, 'America/Argentina/Buenos_Aires').startOf('day');
+    const ahora = prestacionService.obtenerFechaActualArgentina().startOf('day');
     const hace7Dias = ahora.clone().subtract(7, 'days').startOf('day');
 
     return fechaPrestacion.isSameOrAfter(hace7Dias) && fechaPrestacion.isSameOrBefore(ahora);
