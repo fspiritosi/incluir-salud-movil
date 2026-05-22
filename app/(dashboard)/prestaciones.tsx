@@ -791,7 +791,7 @@ export default function PrestacionesPage() {
                       </View>
                     </Button>
 
-                    {/* Botón Completar: deshabilitado si es fecha futura, oculto si está vencido */}
+                    {/* Botón Completar: deshabilitado si es fecha futura */}
                     {esFechaFutura(prestacion.fecha) ? (
                       <Button
                         size="sm"
@@ -802,7 +802,7 @@ export default function PrestacionesPage() {
                           Programada
                         </Text>
                       </Button>
-                    ) : isPrestacionDentroDeUltimaSemana(prestacion.fecha) && (
+                    ) : (
                       <Button
                         size="sm"
                         className="flex-2"
