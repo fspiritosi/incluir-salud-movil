@@ -419,7 +419,9 @@ export default function PrestacionesPage() {
   const esFechaFutura = (fecha: string) => {
     const fechaPrestacion = moment.tz(fecha, 'America/Argentina/Buenos_Aires').startOf('day');
     const hoy = prestacionService.obtenerFechaActualArgentina().startOf('day');
-    return fechaPrestacion.isAfter(hoy);
+    const esF = fechaPrestacion.isAfter(hoy);
+    console.log('🔍 esFechaFutura:', { fecha, fechaPrestacion: fechaPrestacion.format('YYYY-MM-DD'), hoy: hoy.format('YYYY-MM-DD'), esF });
+    return esF;
   };
 
   // Obtener badge de urgencia para una prestación
