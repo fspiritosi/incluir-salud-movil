@@ -80,7 +80,7 @@ export default function ValidarCentroPage() {
 
       setPrestaciones(data);
       // Seleccionar solo las que no tienen límite cumplido
-      setSelectedIds(new Set(data.filter(p => !p.paciente_completo_hoy).map(p => p.prestacion_id)));
+      setSelectedIds(new Set(data.filter(p => !(p as any).paciente_completo_hoy).map(p => p.prestacion_id)));
     } catch (e: any) {
       setErrorMessage(e?.message || 'Error al cargar prestaciones');
       setErrorDetail(null);
@@ -186,7 +186,7 @@ export default function ValidarCentroPage() {
     }
 
     const selectedPrestaciones = prestaciones.filter(p => selectedIds.has(p.prestacion_id));
-    const bloqueadas = selectedPrestaciones.filter(p => p.paciente_completo_hoy);
+    const bloqueadas = selectedPrestaciones.filter(p => (p as any).paciente_completo_hoy);
 
     if (bloqueadas.length > 0) {
       setErrorMessage('Hay pacientes que ya alcanzaron su límite diario. Quítalos de la selección para continuar.');
@@ -239,7 +239,7 @@ export default function ValidarCentroPage() {
         setSuccessModalOpen(true);
       } else {
         setErrorMessage(result.mensaje);
-        setErrorDetail(result.detalle ? JSON.stringify(result.detalle, null, 2) : null);
+        setErrorDetail((result as any).detalle ? JSON.stringify((result as any).detalle, null, 2) : null);
         setErrorModalOpen(true);
       }
     } catch (e: any) {
@@ -350,7 +350,7 @@ export default function ValidarCentroPage() {
                   variant="outline"
                   size="sm"
                   onPress={() => {
-                    setSelectedIds(new Set(prestaciones.filter(p => !p.paciente_completo_hoy).map(p => p.prestacion_id)));
+                    setSelectedIds(new Set(prestaciones.filter(p => !(p as any).paciente_completo_hoy).map(p => p.prestacion_id)));
                   }}
                 >
                   <Text className="text-sm">Sólo disponibles</Text>
@@ -361,7 +361,7 @@ export default function ValidarCentroPage() {
             {/* Prestaciones list */}
             <View className="gap-2">
               {prestaciones.map((p) => {
-                const disabledByLimit = Boolean(p.paciente_completo_hoy);
+                const disabledByLimit = Boolean((p as any).paciente_completo_hoy);
                 const isSelected = selectedIds.has(p.prestacion_id);
                 return (
                 <Card
