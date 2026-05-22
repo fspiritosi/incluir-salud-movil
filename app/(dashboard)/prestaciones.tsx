@@ -417,7 +417,7 @@ export default function PrestacionesPage() {
 
   // Verificar si una prestación tiene fecha futura (no se puede completar aún)
   const esFechaFutura = (fecha: string) => {
-    const fechaPrestacion = moment(fecha).tz('America/Argentina/Buenos_Aires').startOf('day');
+    const fechaPrestacion = moment.utc(fecha).tz('America/Argentina/Buenos_Aires').startOf('day');
     const hoy = moment().tz('America/Argentina/Buenos_Aires').startOf('day');
     return fechaPrestacion.isAfter(hoy);
   };
