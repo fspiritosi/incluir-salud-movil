@@ -1,3 +1,4 @@
+import moment from 'moment-timezone';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
   ArrowLeft,
@@ -8,7 +9,7 @@ import {
   Users,
   AlertCircle,
 } from 'lucide-react-native';
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { RefreshControl, ScrollView, View, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -56,6 +57,7 @@ export default function ValidarCentroPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [validating, setValidating] = useState(false);
   const [suggestingCenterLocation, setSuggestingCenterLocation] = useState(false);
+  const [selectedDay, setSelectedDay] = useState<string>('');
 
   const [successModalOpen, setSuccessModalOpen] = useState(false);
   const [successModalContext, setSuccessModalContext] = useState<'validacion' | 'sugerencia'>('validacion');
@@ -63,6 +65,38 @@ export default function ValidarCentroPage() {
   const [errorModalOpen, setErrorModalOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [errorDetail, setErrorDetail] = useState<string | null>(null);
+
+  const prestacionesByDay = useMemo(() => {
+    const groups: { [key: string]: PrestacionCentro[] } = {};
+    prestaciones.forEach(p => {
+      const day = moment.utc(p.fecha).tz('America/Argentina/Buenos_Aires').format('YYYY-MM-DD');
+      if (!groups[day]) groups[day] = [];
+      groups[day].push(p);
+    });
+    return groups;
+  }, [prestaciones]);
+
+  const availableDays = useMemo(() => {
+    return Object.keys(prestacionesByDay).sort().reverse();
+  }, [prestacionesByDay]);
+
+  const prestacionesDelDia = useMemo(() => {
+    return prestacionesByDay[selectedDay] || [];
+  }, [prestacionesByDay, selectedDay]);
+
+  const getDayLabel = (day: string) => {
+    const today = moment().tz('America/Argentina/Buenos_Aires').format('YYYY-MM-DD');
+    const yesterday = moment().tz('America/Argentina/Buenos_Aires').subtract(1, 'day').format('YYYY-MM-DD');
+    if (day === today) return 'Hoy';
+    if (day === yesterday) return 'Ayer';
+    return moment(day).format('DD/MM');
+  };
+
+  const handleDayChange = (day: string) => {
+    setSelectedDay(day);
+    const dayPrestaciones = prestacionesByDay[day] || [];
+    setSelectedIds(new Set(dayPrestaciones.filter(p => !(p as any).paciente_completo_hoy).map(p => p.prestacion_id)));
+  };
 
   const loadPrestaciones = useCallback(async () => {
     if (!centroId) return;
@@ -79,8 +113,20 @@ export default function ValidarCentroPage() {
       }
 
       setPrestaciones(data);
-      // Seleccionar solo las que no tienen límite cumplido
-      setSelectedIds(new Set(data.filter(p => !(p as any).paciente_completo_hoy).map(p => p.prestacion_id)));
+
+      // Seleccionar el día de hoy por defecto, o el más reciente
+      const today = moment().tz('America/Argentina/Buenos_Aires').format('YYYY-MM-DD');
+      const groups: { [key: string]: PrestacionCentro[] } = {};
+      data.forEach((p: PrestacionCentro) => {
+        const day = moment.utc(p.fecha).tz('America/Argentina/Buenos_Aires').format('YYYY-MM-DD');
+        if (!groups[day]) groups[day] = [];
+        groups[day].push(p);
+      });
+      const days = Object.keys(groups).sort().reverse();
+      const defaultDay = days.includes(today) ? today : (days[0] || '');
+      setSelectedDay(defaultDay);
+      const defaultPrestaciones = groups[defaultDay] || [];
+      setSelectedIds(new Set(defaultPrestaciones.filter(p => !(p as any).paciente_completo_hoy).map(p => p.prestacion_id)));
     } catch (e: any) {
       setErrorMessage(e?.message || 'Error al cargar prestaciones');
       setErrorDetail(null);
@@ -170,7 +216,7 @@ export default function ValidarCentroPage() {
   };
 
   const selectAll = () => {
-    setSelectedIds(new Set(prestaciones.map(p => p.prestacion_id)));
+    setSelectedIds(new Set(prestacionesDelDia.map(p => p.prestacion_id)));
   };
 
   const selectNone = () => {
@@ -331,12 +377,38 @@ export default function ValidarCentroPage() {
               </CardContent>
             </Card>
 
+            {/* Selector de días */}
+            {availableDays.length > 1 && (
+              <View className="mb-4">
+                <Text className="text-sm font-medium text-muted-foreground mb-2">Seleccioná el día a validar:</Text>
+                <View className="flex-row flex-wrap gap-2">
+                  {availableDays.map(day => (
+                    <Button
+                      key={day}
+                      variant={selectedDay === day ? 'default' : 'outline'}
+                      size="sm"
+                      onPress={() => handleDayChange(day)}
+                    >
+                      <View className="items-center">
+                        <Text className={`text-sm font-medium ${selectedDay === day ? 'text-primary-foreground' : ''}`}>
+                          {getDayLabel(day)}
+                        </Text>
+                        <Text className={`text-xs ${selectedDay === day ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>
+                          {(prestacionesByDay[day] || []).length} prest.
+                        </Text>
+                      </View>
+                    </Button>
+                  ))}
+                </View>
+              </View>
+            )}
+
             {/* Selection controls */}
             <View className="flex-row items-center justify-between mb-3">
               <View className="flex-row items-center gap-2">
                 <Users size={18} className="text-muted-foreground" />
                 <Text className="text-sm text-muted-foreground">
-                  {selectedIds.size} de {prestaciones.length} seleccionadas
+                  {selectedIds.size} de {prestacionesDelDia.length} seleccionadas
                 </Text>
               </View>
               <View className="flex-row gap-2">
@@ -350,17 +422,17 @@ export default function ValidarCentroPage() {
                   variant="outline"
                   size="sm"
                   onPress={() => {
-                    setSelectedIds(new Set(prestaciones.filter(p => !(p as any).paciente_completo_hoy).map(p => p.prestacion_id)));
+                    setSelectedIds(new Set(prestacionesDelDia.filter(p => !(p as any).paciente_completo_hoy).map(p => p.prestacion_id)));
                   }}
                 >
-                  <Text className="text-sm">Sólo disponibles</Text>
+                  <Text className="text-sm">Disponibles</Text>
                 </Button>
               </View>
             </View>
 
             {/* Prestaciones list */}
             <View className="gap-2">
-              {prestaciones.map((p) => {
+              {prestacionesDelDia.map((p) => {
                 const disabledByLimit = Boolean((p as any).paciente_completo_hoy);
                 const isSelected = selectedIds.has(p.prestacion_id);
                 return (
