@@ -417,11 +417,9 @@ export default function PrestacionesPage() {
 
   // Verificar si una prestación tiene fecha futura (no se puede completar aún)
   const esFechaFutura = (fecha: string) => {
-    const fechaPrestacion = moment.tz(fecha, 'America/Argentina/Buenos_Aires').startOf('day');
-    const hoy = prestacionService.obtenerFechaActualArgentina().startOf('day');
-    const esF = fechaPrestacion.isAfter(hoy);
-    console.log('🔍 esFechaFutura:', { fecha, fechaPrestacion: fechaPrestacion.format('YYYY-MM-DD'), hoy: hoy.format('YYYY-MM-DD'), esF });
-    return esF;
+    const fechaPrestacion = moment(fecha).tz('America/Argentina/Buenos_Aires').startOf('day');
+    const hoy = moment().tz('America/Argentina/Buenos_Aires').startOf('day');
+    return fechaPrestacion.isAfter(hoy);
   };
 
   // Obtener badge de urgencia para una prestación
