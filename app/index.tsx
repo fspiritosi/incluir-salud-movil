@@ -4,6 +4,7 @@ import { router } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { Text } from '../components/ui/text';
 import { choferService } from '../services/choferService';
+import { deviceService } from '../services/deviceService';
 
 export default function IndexPage() {
   const [loading, setLoading] = useState(true);
@@ -13,6 +14,7 @@ export default function IndexPage() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       // Redireccionar basado en el estado de autenticación
       if (session) {
+        deviceService.registerDevice().catch(console.error);
         choferService.getLandingRoute().then((path) => router.replace(path));
       } else {
         router.replace('/login');
@@ -24,6 +26,7 @@ export default function IndexPage() {
     // Escuchar cambios de autenticación
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session) {
+        deviceService.registerDevice().catch(console.error);
         choferService.getLandingRoute().then((path) => router.replace(path));
       } else {
         router.replace('/login');

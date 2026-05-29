@@ -343,7 +343,7 @@ export default function ValidarCentroPage() {
 
       <ScrollView
         className="flex-1"
-        contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
+        contentContainerStyle={{ padding: 16, paddingBottom: 32 + insets.bottom }}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
@@ -495,7 +495,7 @@ export default function ValidarCentroPage() {
 
               <Button
                 onPress={handleSugerirUbicacionCentro}
-                disabled={suggestingCenterLocation || !connectivity.isConnected}
+                disabled={suggestingCenterLocation}
                 variant="outline"
                 className="w-full mt-3"
               >
