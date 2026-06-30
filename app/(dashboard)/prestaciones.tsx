@@ -408,8 +408,8 @@ export default function PrestacionesPage() {
   };
 
   const isPrestacionDentroDeUltimaSemana = (fecha: string) => {
-    const fechaPrestacion = moment.tz(fecha, 'America/Argentina/Buenos_Aires');
-    const ahora = prestacionService.obtenerFechaActualArgentina();
+    const fechaPrestacion = moment.tz(fecha, 'America/Argentina/Buenos_Aires').startOf('day');
+    const ahora = prestacionService.obtenerFechaActualArgentina().startOf('day');
     const hace7Dias = ahora.clone().subtract(7, 'days').startOf('day');
 
     return fechaPrestacion.isSameOrAfter(hace7Dias) && fechaPrestacion.isSameOrBefore(ahora);
@@ -417,8 +417,8 @@ export default function PrestacionesPage() {
 
   // Verificar si una prestación tiene fecha futura (no se puede completar aún)
   const esFechaFutura = (fecha: string) => {
-    const fechaPrestacion = moment.tz(fecha, 'America/Argentina/Buenos_Aires').startOf('day');
-    const hoy = prestacionService.obtenerFechaActualArgentina().startOf('day');
+    const fechaPrestacion = moment.utc(fecha).tz('America/Argentina/Buenos_Aires').startOf('day');
+    const hoy = moment().tz('America/Argentina/Buenos_Aires').startOf('day');
     return fechaPrestacion.isAfter(hoy);
   };
 
@@ -791,7 +791,7 @@ export default function PrestacionesPage() {
                       </View>
                     </Button>
 
-                    {/* Botón Completar: deshabilitado si es fecha futura, oculto si está vencido */}
+                    {/* Botón Completar: deshabilitado si es fecha futura */}
                     {esFechaFutura(prestacion.fecha) ? (
                       <Button
                         size="sm"
@@ -802,7 +802,7 @@ export default function PrestacionesPage() {
                           Programada
                         </Text>
                       </Button>
-                    ) : isPrestacionDentroDeUltimaSemana(prestacion.fecha) && (
+                    ) : (
                       <Button
                         size="sm"
                         className="flex-2"

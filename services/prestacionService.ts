@@ -3,6 +3,7 @@ import moment from 'moment-timezone';
 import 'moment/locale/es'; // Importar locale en español
 import { supabase } from '../lib/supabase';
 import { connectivityService } from './connectivityService';
+import { deviceService } from './deviceService';
 
 // Tipos base de la base de datos
 export interface PrestacionDB {
@@ -76,6 +77,15 @@ export interface PrestacionCompleta {
   paciente_id: string;
 }
 
+export interface SugerenciaOffline {
+  tipo: 'paciente' | 'centro';
+  id: string;
+  ubicacion_lat: number;
+  ubicacion_lng: number;
+  precision_m: number | null;
+  timestamp: string;
+}
+
 export interface PrestacionOffline {
   prestacion_id: string;
   accion?: 'cerrar' | 'transporte_iniciar' | 'transporte_finalizar';
@@ -95,6 +105,7 @@ export interface ValidacionUbicacion {
 
 class PrestacionService {
   private readonly OFFLINE_KEY = 'prestaciones_offline';
+  private readonly SUGGESTIONS_OFFLINE_KEY = 'sugerencias_offline';
   private readonly CACHE_KEY = 'prestaciones_cache';
   private readonly CACHE_TIMESTAMP_KEY = 'prestaciones_cache_timestamp';
   private readonly TIMEZONE = 'America/Argentina/Buenos_Aires';
@@ -111,7 +122,21 @@ class PrestacionService {
     ubicacionLat: number,
     ubicacionLng: number,
     precisionM?: number | null
-  ): Promise<{ exito: boolean; mensaje: string }> {
+  ): Promise<{ exito: boolean; mensaje: string; offline?: boolean }> {
+    const isOnline = await connectivityService.isOnline();
+
+    if (!isOnline) {
+      await this.guardarSugerenciaOffline({
+        tipo: 'paciente',
+        id: prestacionId,
+        ubicacion_lat: ubicacionLat,
+        ubicacion_lng: ubicacionLng,
+        precision_m: precisionM ?? null,
+        timestamp: new Date().toISOString(),
+      });
+      return { exito: true, mensaje: 'Sugerencia guardada. Se enviará cuando tengas conexión.', offline: true };
+    }
+
     const { data, error } = await supabase.rpc('sugerir_ubicacion_desde_prestacion', {
       p_prestacion_id: prestacionId,
       p_lat: ubicacionLat,
@@ -136,7 +161,21 @@ class PrestacionService {
     ubicacionLat: number,
     ubicacionLng: number,
     precisionM?: number | null
-  ): Promise<{ exito: boolean; mensaje: string }> {
+  ): Promise<{ exito: boolean; mensaje: string; offline?: boolean }> {
+    const isOnline = await connectivityService.isOnline();
+
+    if (!isOnline) {
+      await this.guardarSugerenciaOffline({
+        tipo: 'centro',
+        id: centroId,
+        ubicacion_lat: ubicacionLat,
+        ubicacion_lng: ubicacionLng,
+        precision_m: precisionM ?? null,
+        timestamp: new Date().toISOString(),
+      });
+      return { exito: true, mensaje: 'Sugerencia guardada. Se enviará cuando tengas conexión.', offline: true };
+    }
+
     const { data, error } = await supabase.rpc('sugerir_ubicacion_centro', {
       p_centro_id: centroId,
       p_lat: ubicacionLat,
@@ -698,6 +737,19 @@ class PrestacionService {
         // Validar contra la ubicación del paciente
         targetLat = prestacion.ubicacion_paciente_lat;
         targetLng = prestacion.ubicacion_paciente_lng;
+
+        // Si no hay ubicación en cache, buscar en sugerencias offline pendientes
+        if (typeof targetLat !== 'number' || typeof targetLng !== 'number') {
+          const sugerencias = await this.obtenerSugerenciasOffline();
+          const sugerencia = sugerencias.find(s => s.tipo === 'paciente' && s.id === prestacionId);
+          if (sugerencia) {
+            targetLat = sugerencia.ubicacion_lat;
+            targetLng = sugerencia.ubicacion_lng;
+            ubicacionDescripcion = 'paciente (ubicación sugerida pendiente)';
+          } else {
+            throw new Error('El paciente no tiene ubicación registrada ni sugerida');
+          }
+        }
       }
 
       // Calcular distancia
@@ -794,10 +846,12 @@ class PrestacionService {
       // Si hay conexión, usar validación online normal
 
       // Llamar a la función de Supabase para validar y cerrar
+      const deviceId = await deviceService.getDeviceId();
       const { data, error } = await supabase.rpc('cerrar_prestacion_con_validacion', {
         prestacion_id: prestacionId,
         ubicacion_profesional: `POINT(${ubicacionLng} ${ubicacionLat})`,
         notas_cierre: notas || null,
+        p_device_id: deviceId,
         radio_permitido: 50
       });
 
@@ -833,6 +887,69 @@ class PrestacionService {
     } catch (error) {
       console.error('Error reseteando prestación:', error);
       throw error;
+    }
+  }
+
+  // Guardar sugerencia offline para sincronizar después
+  private async guardarSugerenciaOffline(sugerencia: SugerenciaOffline): Promise<void> {
+    try {
+      const raw = await AsyncStorage.getItem(this.SUGGESTIONS_OFFLINE_KEY);
+      const lista: SugerenciaOffline[] = raw ? JSON.parse(raw) : [];
+      const existe = lista.find(s => s.tipo === sugerencia.tipo && s.id === sugerencia.id);
+      if (!existe) {
+        lista.push(sugerencia);
+        await AsyncStorage.setItem(this.SUGGESTIONS_OFFLINE_KEY, JSON.stringify(lista));
+      }
+    } catch (error) {
+      console.error('Error guardando sugerencia offline:', error);
+    }
+  }
+
+  async obtenerSugerenciasOffline(): Promise<SugerenciaOffline[]> {
+    try {
+      const raw = await AsyncStorage.getItem(this.SUGGESTIONS_OFFLINE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async sincronizarSugerenciasOffline(): Promise<number> {
+    try {
+      const lista = await this.obtenerSugerenciasOffline();
+      if (lista.length === 0) return 0;
+
+      const fallidas: SugerenciaOffline[] = [];
+      let sincronizadas = 0;
+
+      for (const s of lista) {
+        try {
+          let resultado: { exito: boolean };
+          if (s.tipo === 'paciente') {
+            resultado = await this.sugerirUbicacionDesdePrestacion(s.id, s.ubicacion_lat, s.ubicacion_lng, s.precision_m);
+          } else {
+            resultado = await this.sugerirUbicacionCentro(s.id, s.ubicacion_lat, s.ubicacion_lng, s.precision_m);
+          }
+          if (resultado.exito) {
+            sincronizadas++;
+          } else {
+            fallidas.push(s);
+          }
+        } catch {
+          fallidas.push(s);
+        }
+      }
+
+      if (fallidas.length === 0) {
+        await AsyncStorage.removeItem(this.SUGGESTIONS_OFFLINE_KEY);
+      } else {
+        await AsyncStorage.setItem(this.SUGGESTIONS_OFFLINE_KEY, JSON.stringify(fallidas));
+      }
+
+      return sincronizadas;
+    } catch (error) {
+      console.error('Error sincronizando sugerencias offline:', error);
+      return 0;
     }
   }
 
@@ -930,7 +1047,10 @@ class PrestacionService {
       // 2. Sincronizar prestaciones offline restantes
       const prestacionesSincronizadas = await this.sincronizarPrestacionesOffline();
 
-      // 3. Actualizar cache con datos frescos
+      // 3. Sincronizar sugerencias offline
+      await this.sincronizarSugerenciasOffline();
+
+      // 4. Actualizar cache con datos frescos
       const datosActualizados = await this.obtenerPrestacionesDelDia(undefined, true);
 
       console.log(`✅ Sincronización completa: ${prestacionesSincronizadas} prestaciones sincronizadas, cache actualizado`);
@@ -1314,10 +1434,12 @@ class PrestacionService {
         radioPermitidoMetros
       });
 
+      const deviceId = await deviceService.getDeviceId();
       const { data, error } = await supabase.rpc('validar_prestaciones_centro', {
         p_prestacion_ids: prestacionIds,
         p_ubicacion_lat: ubicacionLat,
         p_ubicacion_lng: ubicacionLng,
+        p_device_id: deviceId,
         p_radio_permitido_metros: radioPermitidoMetros
       });
 

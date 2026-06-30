@@ -28,10 +28,8 @@ import { useConnectivity } from '../../services/connectivityService';
 import { choferService } from '../../services/choferService';
 import { reporteService, type ReporteData, type PacienteReporte } from '@/services/reporteService';
 import { ChevronDown, ChevronUp } from 'lucide-react-native';
-import { File as FSFile, Paths, EncodingType } from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import * as FileSystem from 'expo-file-system';
 import { FileDown } from 'lucide-react-native';
 import moment from 'moment-timezone';
 import React, { useEffect, useState, useMemo } from 'react';
@@ -390,19 +388,8 @@ export default function ReportesPage() {
             // Generar el PDF
             const { uri } = await Print.printToFileAsync({ html });
 
-            // Crear nombre de archivo descriptivo
-            const fileName = `Reporte_${prestador.apellido}_${prestador.nombre}_${formatearFecha(fechaInicio).replace(/\//g, '-')}_${formatearFecha(fechaFin).replace(/\//g, '-')}.pdf`;
-
-            // Crear instancias de FSFile usando la nueva API
-            // El primer parámetro puede ser un URI string, el segundo es el nombre del archivo
-            const tempFile = new FSFile(uri);
-            const newFile = new FSFile(Paths.cache, fileName);
-
-            // Copiar el archivo temporal al nuevo archivo con nombre descriptivo
-            tempFile.copy(newFile);
-
-            // Compartir el PDF con el nombre correcto
-            await Sharing.shareAsync(newFile.uri, {
+            // Compartir el PDF
+            await Sharing.shareAsync(uri, {
                 UTI: '.pdf',
                 mimeType: 'application/pdf',
             });
