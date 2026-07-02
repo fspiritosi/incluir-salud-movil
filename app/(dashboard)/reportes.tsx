@@ -270,10 +270,8 @@ export default function ReportesPage() {
     };
 
     const formatearMonto = (monto: number) => {
-        return monto.toLocaleString('es-AR', {
-            style: 'currency',
-            currency: 'ARS',
-        });
+        const valor = (monto || 0).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+        return `$ ${valor}`;
     };
 
     const getFilterLabel = () => {
@@ -412,7 +410,8 @@ export default function ReportesPage() {
             showAlert('Éxito', 'PDF generado correctamente');
         } catch (error) {
             console.error('Error generando PDF:', error);
-            showAlert('Error', 'No se pudo generar el PDF');
+            const msg = error instanceof Error ? error.message : String(error);
+            showAlert('Error', `No se pudo generar el PDF: ${msg}`);
         } finally {
             setIsGeneratingPDF(false);
         }
