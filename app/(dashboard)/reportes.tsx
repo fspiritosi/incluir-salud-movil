@@ -397,6 +397,10 @@ export default function ReportesPage() {
 
             // Copiar al cache (necesario para Android 14 - expo-sharing requiere content:// URI)
             const newPath = `${FileSystem.cacheDirectory}${fileName}`;
+            const existing = await FileSystem.getInfoAsync(newPath);
+            if (existing.exists) {
+                await FileSystem.deleteAsync(newPath, { idempotent: true });
+            }
             await FileSystem.copyAsync({ from: uri, to: newPath });
 
             // Compartir el PDF
