@@ -391,14 +391,10 @@ export default function ReportesPage() {
             const sanitize = (str: string) =>
                 str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9_-]/g, '_');
 
-            const fileName = `Reporte_${sanitize(prestador.apellido)}_${sanitize(prestador.nombre)}_${formatearFecha(fechaInicio).replace(/\//g, '-')}_${formatearFecha(fechaFin).replace(/\//g, '-')}.pdf`;
+            const fileName = `Reporte_${sanitize(prestador.apellido)}_${sanitize(prestador.nombre)}_${formatearFecha(fechaInicio).replace(/\//g, '-')}_${formatearFecha(fechaFin).replace(/\//g, '-')}_${Date.now()}.pdf`;
 
             // Copiar al cache (necesario para Android 14 - expo-sharing requiere content:// URI)
             const newPath = `${FileSystem.cacheDirectory}${fileName}`;
-            const existing = await FileSystem.getInfoAsync(newPath);
-            if (existing.exists) {
-                await FileSystem.deleteAsync(newPath, { idempotent: true });
-            }
             await FileSystem.copyAsync({ from: uri, to: newPath });
 
             // Compartir el PDF
