@@ -24,7 +24,7 @@ import { reporteService, type ReporteData, type PacienteReporte } from '@/servic
 import { ChevronDown, ChevronUp } from 'lucide-react-native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { FileDown } from 'lucide-react-native';
 import moment from 'moment-timezone';
 import React, { useEffect, useState, useMemo } from 'react';
@@ -386,14 +386,10 @@ export default function ReportesPage() {
             const sanitize = (str: string) =>
                 str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9_-]/g, '_');
 
-            const fileName = `Reporte_${sanitize(prestador.apellido)}_${sanitize(prestador.nombre)}_${formatearFecha(fechaInicio).replace(/\//g, '-')}_${formatearFecha(fechaFin).replace(/\//g, '-')}.pdf`;
+            const fileName = `Reporte_${sanitize(prestador.apellido)}_${sanitize(prestador.nombre)}_${formatearFecha(fechaInicio).replace(/\//g, '-')}_${formatearFecha(fechaFin).replace(/\//g, '-')}_${Date.now()}.pdf`;
 
             // Copiar al cache (necesario para Android 14 - expo-sharing requiere content:// URI)
             const newPath = `${FileSystem.cacheDirectory}${fileName}`;
-            const existing = await FileSystem.getInfoAsync(newPath);
-            if (existing.exists) {
-                await FileSystem.deleteAsync(newPath, { idempotent: true });
-            }
             await FileSystem.copyAsync({ from: uri, to: newPath });
 
             // Compartir el PDF
