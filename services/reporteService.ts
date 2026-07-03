@@ -105,7 +105,7 @@ class ReporteService {
         fechaInicio: Date,
         fechaFin: Date,
         estado?: 'todos' | 'pendiente' | 'completada' | 'cancelada' | 'en_proceso',
-        pacienteId?: string
+        pacienteIds?: string[]
     ): Promise<ReporteData> {
         try {
             // 1. Obtener usuario autenticado
@@ -163,9 +163,9 @@ class ReporteService {
                 query = query.eq('estado', estado);
             }
 
-            // Aplicar filtro de paciente si se especifica
-            if (pacienteId) {
-                query = query.eq('paciente_id', pacienteId);
+            // Aplicar filtro de pacientes si se especifica
+            if (pacienteIds && pacienteIds.length > 0) {
+                query = query.in('paciente_id', pacienteIds);
             }
 
             const { data: prestaciones, error: prestacionesError } = await query;
