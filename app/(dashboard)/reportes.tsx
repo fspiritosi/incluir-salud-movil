@@ -15,6 +15,13 @@ import {
     DateRange,
 } from '@/components/ui/date-filter';
 import { Checkbox } from '@/components/ui/checkbox';
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '@/components/ui/select';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Text } from '@/components/ui/text';
 import { supabase } from '../../lib/supabase';
