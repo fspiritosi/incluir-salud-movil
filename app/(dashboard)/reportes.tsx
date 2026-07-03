@@ -14,13 +14,7 @@ import {
     DateFilterType,
     DateRange,
 } from '@/components/ui/date-filter';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Text } from '@/components/ui/text';
 import { supabase } from '../../lib/supabase';
@@ -38,6 +32,7 @@ import {
     ActivityIndicator,
     Platform,
     ScrollView,
+    TouchableOpacity,
     View,
     Image
 } from 'react-native';
@@ -102,7 +97,7 @@ export default function ReportesPage() {
     const [estado, setEstado] = useState<
         'todos' | 'pendiente' | 'completada' | 'cancelada' | 'en_proceso'
     >('todos');
-    const [pacienteId, setPacienteId] = useState<string | undefined>(undefined);
+    const [pacienteIds, setPacienteIds] = useState<string[]>([]);
     const [pacientes, setPacientes] = useState<PacienteReporte[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
@@ -170,7 +165,7 @@ export default function ReportesPage() {
                 fechaInicio,
                 fechaFin,
                 estado,
-                pacienteId
+                pacienteIds.length > 0 ? pacienteIds : undefined
             );
             setReporteData(data);
 
@@ -183,7 +178,7 @@ export default function ReportesPage() {
                         inicioMesAnterior,
                         finMesAnterior,
                         estado,
-                        pacienteId
+                        pacienteIds.length > 0 ? pacienteIds : undefined
                     );
                     setReporteMesAnterior(dataAnterior);
                 } catch (error) {
@@ -487,33 +482,75 @@ export default function ReportesPage() {
                             </Select>
                         </View>
 
-                        {/* Paciente */}
+                        {/* Pacientes — multi-select */}
                         <View>
-                            <Text variant="small" className="font-medium mb-2">
-                                Paciente
-                            </Text>
-                            <Select
-                                value={pacienteId ? { value: pacienteId, label: pacientes.find(p => p.id === pacienteId)?.apellido + ', ' + pacientes.find(p => p.id === pacienteId)?.nombre || 'Paciente' } : undefined}
-                                onValueChange={(option) => {
-                                    if (option?.value) {
-                                        setPacienteId(option.value === 'todos' ? undefined : option.value);
-                                    }
-                                }}
+                            <View className="flex-row items-center justify-between mb-2">
+                                <Text variant="small" className="font-medium">
+                                    Pacientes
+                                </Text>
+                                {pacienteIds.length > 0 && (
+                                    <TouchableOpacity onPress={() => setPacienteIds([])}>
+                                        <Text variant="small" className="text-primary">
+                                            Limpiar ({pacienteIds.length})
+                                        </Text>
+                                    </TouchableOpacity>
+                                )}
+                            </View>
+                            <ScrollView
+                                style={{ maxHeight: 180 }}
+                                nestedScrollEnabled
+                                className="border border-input rounded-md bg-background"
                             >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Todos los pacientes" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem label="Todos los pacientes" value="todos" />
-                                    {pacientes.map((paciente) => (
-                                        <SelectItem 
-                                            key={paciente.id} 
-                                            label={`${paciente.apellido}, ${paciente.nombre} (${paciente.documento})`} 
-                                            value={paciente.id} 
-                                        />
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                                {pacientes.map((paciente, index) => {
+                                    const seleccionado = pacienteIds.includes(paciente.id);
+                                    return (
+                                        <TouchableOpacity
+                                            key={paciente.id}
+                                            onPress={() => {
+                                                setPacienteIds(prev =>
+                                                    seleccionado
+                                                        ? prev.filter(id => id !== paciente.id)
+                                                        : [...prev, paciente.id]
+                                                );
+                                            }}
+                                            className={`flex-row items-center gap-3 px-3 py-2.5 ${
+                                                index < pacientes.length - 1 ? 'border-b border-border' : ''
+                                            }`}
+                                        >
+                                            <Checkbox
+                                                checked={seleccionado}
+                                                onCheckedChange={() => {
+                                                    setPacienteIds(prev =>
+                                                        seleccionado
+                                                            ? prev.filter(id => id !== paciente.id)
+                                                            : [...prev, paciente.id]
+                                                    );
+                                                }}
+                                            />
+                                            <View className="flex-1">
+                                                <Text variant="small" className="font-medium">
+                                                    {paciente.apellido}, {paciente.nombre}
+                                                </Text>
+                                                <Text variant="small" className="text-muted-foreground">
+                                                    DNI {paciente.documento}
+                                                </Text>
+                                            </View>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                                {pacientes.length === 0 && (
+                                    <View className="px-3 py-4">
+                                        <Text variant="small" className="text-muted-foreground text-center">
+                                            No hay pacientes
+                                        </Text>
+                                    </View>
+                                )}
+                            </ScrollView>
+                            {pacienteIds.length === 0 && (
+                                <Text variant="small" className="text-muted-foreground mt-1">
+                                    Ninguno seleccionado = todos
+                                </Text>
+                            )}
                         </View>
 
                         {/* Filtros Guardados (Presets) */}
