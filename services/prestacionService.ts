@@ -867,6 +867,141 @@ class PrestacionService {
     }
   }
 
+  // Helpers para detectar tipo de prestación domiciliaria
+  esTipoAT(tipo: string): boolean {
+    const t = tipo.toLowerCase();
+    return t.includes('acompañante') || t.includes('acompanante');
+  }
+
+  esTipoKinesiologo(tipo: string): boolean {
+    const t = tipo.toLowerCase();
+    return t.includes('kinesiol') || t.includes('kine');
+  }
+
+  // Iniciar prestación domiciliaria (AT o Kine) con validación de ubicación
+  async iniciarPrestacionDomicilio(
+    prestacionId: string,
+    lat: number,
+    lng: number,
+    radioPermitido: number = 200
+  ): Promise<ValidacionUbicacion> {
+    try {
+      const cachedData = await this.obtenerDeCache();
+      const prestacion = cachedData?.pendientes.find(p => p.prestacion_id === prestacionId);
+
+      // Validar ubicación contra domicilio del paciente (solo si tiene coordenadas válidas)
+      const tieneCoordenadas = prestacion &&
+        prestacion.ubicacion_paciente_lat !== 0 &&
+        prestacion.ubicacion_paciente_lng !== 0 &&
+        typeof prestacion.ubicacion_paciente_lat === 'number' &&
+        typeof prestacion.ubicacion_paciente_lng === 'number';
+
+      if (tieneCoordenadas) {
+        const distancia = this.calcularDistancia(lat, lng, prestacion!.ubicacion_paciente_lat, prestacion!.ubicacion_paciente_lng);
+        if (distancia > radioPermitido) {
+          return {
+            exito: false,
+            mensaje: `Estás a ${Math.round(distancia)}m del domicilio. Debés estar a menos de ${radioPermitido}m para iniciar.`,
+            distancia_metros: distancia
+          };
+        }
+      }
+
+      const now = new Date().toISOString();
+
+      // Actualizar en DB
+      const { error } = await supabase
+        .from('prestaciones')
+        .update({ estado: 'en_proceso', started_at: now, updated_at: now })
+        .eq('id', prestacionId);
+
+      if (error) throw error;
+
+      // Guardar coords de inicio en AsyncStorage (para validación de cierre en Kine)
+      await AsyncStorage.setItem(`inicio_coords_${prestacionId}`, JSON.stringify({ lat, lng, started_at: now }));
+
+      // Actualizar cache
+      await this.actualizarCacheTransporte(prestacionId, 'iniciar');
+
+      return { exito: true, mensaje: 'Prestación iniciada correctamente.', distancia_metros: 0 };
+    } catch (error) {
+      console.error('Error iniciando prestación domicilio:', error);
+      return { exito: false, mensaje: 'No se pudo iniciar la prestación. Intentá nuevamente.', distancia_metros: 0 };
+    }
+  }
+
+  // Cerrar prestación domiciliaria (AT: solo duración; Kine: duración + ubicación)
+  async cerrarPrestacionDomicilio(
+    prestacionId: string,
+    lat: number,
+    lng: number,
+    tipoPrestacion: string,
+    notas?: string
+  ): Promise<ValidacionUbicacion> {
+    try {
+      const esKine = this.esTipoKinesiologo(tipoPrestacion);
+      const minDuracion = esKine ? 40 : 30;
+
+      // Obtener started_at desde cache o AsyncStorage
+      const cachedData = await this.obtenerDeCache();
+      const prestacion = cachedData?.pendientes.find(p => p.prestacion_id === prestacionId);
+      const inicioRaw = await AsyncStorage.getItem(`inicio_coords_${prestacionId}`);
+      const inicioDatos = inicioRaw ? JSON.parse(inicioRaw) : null;
+
+      const startedAt = prestacion?.started_at || inicioDatos?.started_at;
+
+      // Validar duración mínima
+      if (startedAt) {
+        const mins = Math.floor((Date.now() - new Date(startedAt).getTime()) / 60000);
+        if (mins < minDuracion) {
+          return {
+            exito: false,
+            mensaje: `La prestación debe durar al menos ${minDuracion} minutos. Llevas ${mins} minutos.`,
+            distancia_metros: 0
+          };
+        }
+      }
+
+      // Para Kinesiólogo: validar que el cierre sea cerca del inicio
+      if (esKine && inicioDatos) {
+        const distancia = this.calcularDistancia(lat, lng, inicioDatos.lat, inicioDatos.lng);
+        if (distancia > 300) {
+          return {
+            exito: false,
+            mensaje: `Estás a ${Math.round(distancia)}m del lugar de inicio. Debés cerrar desde el domicilio del paciente.`,
+            distancia_metros: distancia
+          };
+        }
+      }
+
+      const now = new Date().toISOString();
+
+      // Actualizar en DB
+      const { error } = await supabase
+        .from('prestaciones')
+        .update({
+          estado: 'completada',
+          completed_at: now,
+          updated_at: now,
+          ...(notas !== undefined && { notas })
+        })
+        .eq('id', prestacionId);
+
+      if (error) throw error;
+
+      // Limpiar coords de inicio
+      await AsyncStorage.removeItem(`inicio_coords_${prestacionId}`);
+
+      // Actualizar cache
+      await this.actualizarCacheTransporte(prestacionId, 'finalizar', notas);
+
+      return { exito: true, mensaje: 'Prestación completada correctamente.', distancia_metros: 0 };
+    } catch (error) {
+      console.error('Error cerrando prestación domicilio:', error);
+      return { exito: false, mensaje: 'No se pudo completar la prestación. Intentá nuevamente.', distancia_metros: 0 };
+    }
+  }
+
   // Resetear estado de prestación (solo para desarrollo)
   async resetearEstadoPrestacion(prestacionId: string): Promise<void> {
     try {

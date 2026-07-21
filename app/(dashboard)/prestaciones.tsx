@@ -6,6 +6,7 @@ import {
   Loader2,
   MapPin,
   Phone,
+  Play,
   Wifi,
   WifiOff,
   Search
@@ -83,9 +84,14 @@ export default function PrestacionesPage() {
 
   const [confirmSuggestOpen, setConfirmSuggestOpen] = useState(false);
   const [prestacionParaSugerir, setPrestacionParaSugerir] = useState<PrestacionCompleta | null>(null);
+  const [iniciandoId, setIniciandoId] = useState<string | null>(null);
 
   const esPrestacionTransporte = (prestacion: PrestacionCompleta) =>
     String(prestacion.tipo_prestacion || '').toLowerCase() === 'transporte';
+
+  const esPrestacionDomicilio = (prestacion: PrestacionCompleta) =>
+    prestacionService.esTipoAT(prestacion.tipo_prestacion) ||
+    prestacionService.esTipoKinesiologo(prestacion.tipo_prestacion);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -325,9 +331,39 @@ export default function PrestacionesPage() {
       return;
     }
 
-    if (prestacion.estado === 'pendiente') {
+    if (prestacion.estado === 'pendiente' || prestacion.estado === 'en_proceso') {
       setPrestacionSeleccionada(prestacion);
       setModalVisible(true);
+    }
+  };
+
+  const handleIniciarPrestacion = async (prestacion: PrestacionCompleta) => {
+    try {
+      setIniciandoId(prestacion.prestacion_id);
+      const ubicacion = await requestLocation();
+      if (!ubicacion) {
+        setErrorMessage('No se pudo obtener tu ubicación. Verificá que el GPS esté activado y los permisos concedidos.');
+        setErrorModalOpen(true);
+        return;
+      }
+      const resultado = await prestacionService.iniciarPrestacionDomicilio(
+        prestacion.prestacion_id,
+        ubicacion.latitude,
+        ubicacion.longitude
+      );
+      if (resultado.exito) {
+        setSuccessMessage('Prestación iniciada. Recordá completarla al finalizar.');
+        setSuccessModalOpen(true);
+        await loadPrestaciones(true);
+      } else {
+        setErrorMessage(resultado.mensaje);
+        setErrorModalOpen(true);
+      }
+    } catch (e) {
+      setErrorMessage('No se pudo iniciar la prestación. Intentá nuevamente.');
+      setErrorModalOpen(true);
+    } finally {
+      setIniciandoId(null);
     }
   };
 
@@ -716,7 +752,7 @@ export default function PrestacionesPage() {
                   return (
                     <Card
                       key={prestacion.prestacion_id}
-                      className={`mb-3 ${isPrestacionVencida(prestacion.fecha) ? 'border-amber-500 bg-amber-50' : ''}`}
+                      className={`mb-3 ${prestacion.estado === 'en_proceso' ? 'border-blue-500 bg-blue-50' : isPrestacionVencida(prestacion.fecha) ? 'border-amber-500 bg-amber-50' : ''}`}
                     >
                       <CardHeader className="pb-3">
                         <View className="flex-row justify-between items-start gap-2">
@@ -727,17 +763,29 @@ export default function PrestacionesPage() {
                             <Text variant="small" className="text-muted-foreground font-medium">
                               {prestacion.paciente_nombre}
                             </Text>
+                            {prestacion.estado === 'en_proceso' && prestacion.started_at && (
+                              <Text variant="small" className="text-blue-600 font-medium mt-0.5">
+                                En progreso · {(() => {
+                                  const mins = Math.floor((Date.now() - new Date(prestacion.started_at!).getTime()) / 60000);
+                                  return mins >= 60 ? `${Math.floor(mins/60)}h ${mins%60}m` : `${mins}m`;
+                                })()}
+                              </Text>
+                            )}
                           </View>
 
                           <View className="items-end flex-shrink-0">
                             <View className="flex-row items-center gap-2 mb-1 flex-wrap justify-end">
-                              {urgencia && (
+                              {prestacion.estado === 'en_proceso' ? (
+                                <Badge className="bg-blue-500">
+                                  <Text variant="small" className="font-semibold text-white">En progreso</Text>
+                                </Badge>
+                              ) : urgencia ? (
                                 <Badge className={`${urgencia.color}`}>
                                   <Text variant="small" className="font-semibold">
                                     {urgencia.label}
                                   </Text>
                                 </Badge>
-                              )}
+                              ) : null}
                               <View className="flex-row items-center gap-1">
                                 <Clock size={14} className="text-muted-foreground" />
                                 <Text variant="small" className="text-muted-foreground">
@@ -791,16 +839,34 @@ export default function PrestacionesPage() {
                       </View>
                     </Button>
 
-                    {/* Botón Completar: deshabilitado si es fecha futura */}
+                    {/* Botón acción según estado */}
                     {esFechaFutura(prestacion.fecha) ? (
+                      <Button size="sm" className="flex-2 opacity-50" disabled={true}>
+                        <Text className="text-xs text-primary-foreground font-medium">Programada</Text>
+                      </Button>
+                    ) : esPrestacionDomicilio(prestacion) && prestacion.estado === 'pendiente' ? (
                       <Button
                         size="sm"
-                        className="flex-2 opacity-50"
-                        disabled={true}
+                        className="flex-2 bg-green-600"
+                        onPress={() => handleIniciarPrestacion(prestacion)}
+                        disabled={iniciandoId === prestacion.prestacion_id}
                       >
-                        <Text className="text-xs text-primary-foreground font-medium">
-                          Programada
-                        </Text>
+                        <View className="flex-row items-center gap-1">
+                          {iniciandoId === prestacion.prestacion_id
+                            ? <Loader2 size={14} color="#fff" />
+                            : <Play size={14} color="#fff" />}
+                          <Text className="text-xs text-white font-medium">
+                            {iniciandoId === prestacion.prestacion_id ? 'Iniciando...' : 'Iniciar'}
+                          </Text>
+                        </View>
+                      </Button>
+                    ) : esPrestacionDomicilio(prestacion) && prestacion.estado === 'en_proceso' ? (
+                      <Button
+                        size="sm"
+                        className="flex-2"
+                        onPress={() => handlePrestacionPress(prestacion)}
+                      >
+                        <Text className="text-xs text-primary-foreground font-medium">Completar</Text>
                       </Button>
                     ) : (
                       <Button
@@ -808,13 +874,12 @@ export default function PrestacionesPage() {
                         className="flex-2"
                         onPress={() => handlePrestacionPress(prestacion)}
                       >
-                        <Text className="text-xs text-primary-foreground font-medium">
-                          Completar
-                        </Text>
+                        <Text className="text-xs text-primary-foreground font-medium">Completar</Text>
                       </Button>
                     )}
                   </View>
 
+                  {prestacion.estado !== 'en_proceso' && (
                   <View className="flex-row gap-2 items-center mt-2">
                     <Button
                       variant="outline"
@@ -845,6 +910,7 @@ export default function PrestacionesPage() {
                       </View>
                     </Button>
                   </View>
+                  )}
                 </CardContent>
               </Card>
                   );
