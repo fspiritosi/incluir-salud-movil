@@ -83,7 +83,7 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
     ? (prestacionService.esTipoAT(prestacion.tipo_prestacion) || prestacionService.esTipoKinesiologo(prestacion.tipo_prestacion))
     : false;
   const esEnProceso = prestacion?.estado === 'en_proceso';
-  const minDuracion = prestacion && prestacionService.esTipoKinesiologo(prestacion.tipo_prestacion) ? 40 : 30;
+  const minDuracion = prestacion && prestacionService.esTipoKinesiologo(prestacion.tipo_prestacion) ? 30 : 40;
 
   useEffect(() => {
     if (!esDomicilio || !esEnProceso || !prestacion?.started_at) return;

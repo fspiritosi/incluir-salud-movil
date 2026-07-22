@@ -40,6 +40,8 @@ import { supabase } from '../../lib/supabase';
 import { useLocation } from '../../hooks/useLocation';
 import { useConnectivity } from '../../services/connectivityService';
 import { choferService } from '../../services/choferService';
+import { jornadaService } from '../../services/jornadaService';
+import { useSessionGuard } from '../../hooks/useSessionGuard';
 import {
   ObtenerPrestacionesMesResult,
   ObtenerPrestacionesRangoResult,
@@ -55,7 +57,7 @@ export default function PrestacionesPage() {
   const insets = useSafeAreaInsets();
   const connectivity = useConnectivity();
   const { requestLocation } = useLocation();
-  const [session, setSession] = useState<Session | null>(null);
+  const { session } = useSessionGuard(() => router.replace('/'));
   const [isChoferUser, setIsChoferUser] = useState(false);
   const [prestacionesPendientes, setPrestacionesPendientes] = useState<PrestacionCompleta[]>([]);
   const [prestacionesCompletadas, setPrestacionesCompletadas] = useState<PrestacionCompleta[]>([]);
@@ -85,6 +87,7 @@ export default function PrestacionesPage() {
   const [confirmSuggestOpen, setConfirmSuggestOpen] = useState(false);
   const [prestacionParaSugerir, setPrestacionParaSugerir] = useState<PrestacionCompleta | null>(null);
   const [iniciandoId, setIniciandoId] = useState<string | null>(null);
+  const [horasAcumuladas, setHorasAcumuladas] = useState<Record<string, number>>({});
 
   const esPrestacionTransporte = (prestacion: PrestacionCompleta) =>
     String(prestacion.tipo_prestacion || '').toLowerCase() === 'transporte';
@@ -93,23 +96,6 @@ export default function PrestacionesPage() {
     prestacionService.esTipoAT(prestacion.tipo_prestacion) ||
     prestacionService.esTipoKinesiologo(prestacion.tipo_prestacion);
 
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (!session) {
-        router.replace('/');
-      }
-    });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (!session) {
-        router.replace('/');
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
 
   useEffect(() => {
     if (session) {
@@ -140,6 +126,7 @@ export default function PrestacionesPage() {
         (async () => {
           try {
             if (connectivity.isConnected) {
+              jornadaService.sincronizarJornadasOffline().catch(() => {});
               const sincronizadas: SincronizacionResult = await prestacionService.sincronizarPrestacionesOffline();
               if (sincronizadas > 0) {
                 setSuccessMessage(`Se sincronizaron ${sincronizadas} prestaciones offline`);
@@ -221,6 +208,16 @@ export default function PrestacionesPage() {
 
       setIsOffline(resultado.isOffline);
 
+      // Cargar horas acumuladas del mes (si hay conexión)
+      if (!resultado.isOffline) {
+        try {
+          const horas = await prestacionService.obtenerHorasAcumuladasMes();
+          setHorasAcumuladas(horas);
+        } catch {
+          console.log('No se pudieron cargar horas acumuladas');
+        }
+      }
+
       // Si es offline y hay datos, mostrar mensaje informativo
       if (resultado.isOffline && resultado.isFromCache) {
         console.log('📱 Modo offline - mostrando datos guardados');
@@ -301,6 +298,7 @@ export default function PrestacionesPage() {
     if (connectivity.isConnected) {
       // Si hay conexión, sincronizar todo
       try {
+        jornadaService.sincronizarJornadasOffline().catch(() => {});
         const resultado: SincronizacionCompletaResult = await prestacionService.sincronizarTodo();
 
         if (resultado.prestacionesSincronizadas > 0) {
@@ -771,6 +769,18 @@ export default function PrestacionesPage() {
                                 })()}
                               </Text>
                             )}
+                            {(() => {
+                              const mins = horasAcumuladas[prestacion.paciente_id];
+                              if (!mins) return null;
+                              const h = Math.floor(mins / 60);
+                              const m = mins % 60;
+                              const label = h > 0 ? `${h}h ${m}m` : `${m}m`;
+                              return (
+                                <Text variant="small" className="text-muted-foreground mt-0.5">
+                                  Este mes: {label}
+                                </Text>
+                              );
+                            })()}
                           </View>
 
                           <View className="items-end flex-shrink-0">

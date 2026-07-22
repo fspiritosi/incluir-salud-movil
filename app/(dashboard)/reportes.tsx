@@ -25,6 +25,7 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Text } from '@/components/ui/text';
 import { supabase } from '../../lib/supabase';
+import { useSessionGuard } from '../../hooks/useSessionGuard';
 import { useConnectivity } from '../../services/connectivityService';
 import { choferService } from '../../services/choferService';
 import { reporteService, type ReporteData, type PacienteReporte } from '@/services/reporteService';
@@ -52,26 +53,9 @@ const TIMEZONE =
 
 export default function ReportesPage() {
     const insets = useSafeAreaInsets();
-    const [session, setSession] = useState<Session | null>(null);
+    const { session } = useSessionGuard(() => router.replace('/'));
     const [isChoferUser, setIsChoferUser] = useState(false);
 
-    useEffect(() => {
-        supabase.auth.getSession().then(({ data: { session } }) => {
-            setSession(session);
-            if (!session) {
-                router.replace('/');
-            }
-        });
-
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-            setSession(session);
-            if (!session) {
-                router.replace('/');
-            }
-        });
-
-        return () => subscription.unsubscribe();
-    }, []);
 
     useEffect(() => {
         if (session) {

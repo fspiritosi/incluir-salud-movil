@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useEffect, useState } from 'react';
 import { View, Image } from 'react-native';
 import { router } from 'expo-router';
@@ -5,32 +6,58 @@ import { supabase } from '../lib/supabase';
 import { Text } from '../components/ui/text';
 import { choferService } from '../services/choferService';
 import { deviceService } from '../services/deviceService';
+import { connectivityService } from '../services/connectivityService';
+
+const BACKUP_KEY = 'session_user_backup';
 
 export default function IndexPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     // Obtener sesión actual y manejar redirección
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      // Redireccionar basado en el estado de autenticación
+    const init = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+
       if (session) {
         deviceService.registerDevice().catch(console.error);
-        choferService.getLandingRoute().then((path) => router.replace(path));
-      } else {
-        router.replace('/login');
+        // Guardar backup para cold-start offline
+        await AsyncStorage.setItem(BACKUP_KEY, JSON.stringify({ user: session.user })).catch(() => {});
+        const path = await choferService.getLandingRoute();
+        router.replace(path);
+        setLoading(false);
+        return;
       }
 
-      setLoading(false);
-    });
+      // Sin sesión — verificar si estamos offline con backup previo
+      const isOnline = connectivityService.getCurrentState().isConnected;
+      if (!isOnline) {
+        try {
+          const raw = await AsyncStorage.getItem(BACKUP_KEY);
+          if (raw) {
+            // Hay backup → ir al dashboard en modo offline
+            console.log('📡 Cold-start offline: redirigiendo al dashboard con backup');
+            const path = await choferService.getLandingRoute();
+            router.replace(path);
+            setLoading(false);
+            return;
+          }
+        } catch {}
+      }
 
-    // Escuchar cambios de autenticación
+      // Sin sesión y sin backup → login
+      router.replace('/login');
+      setLoading(false);
+    };
+
+    init();
+
+    // Escuchar cambios de autenticación durante esta pantalla
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session) {
         deviceService.registerDevice().catch(console.error);
         choferService.getLandingRoute().then((path) => router.replace(path));
-      } else {
-        router.replace('/login');
       }
+      // SIGNED_OUT se maneja en useSessionGuard dentro del dashboard
     });
 
     return () => subscription.unsubscribe();

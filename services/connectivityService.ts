@@ -9,11 +9,13 @@ export interface ConnectivityState {
 
 class ConnectivityService {
   private listeners: ((state: ConnectivityState) => void)[] = [];
+  private reconnectCallbacks: (() => void)[] = [];
   private currentState: ConnectivityState = {
     isConnected: false,
     isInternetReachable: false,
     type: 'unknown'
   };
+  private wasOffline = false;
 
   constructor() {
     this.initialize();
@@ -29,14 +31,35 @@ class ConnectivityService {
   }
 
   private updateState(state: any) {
+    const wasOnline = this.currentState.isConnected && this.currentState.isInternetReachable;
+    
     this.currentState = {
       isConnected: state.isConnected ?? false,
       isInternetReachable: state.isInternetReachable ?? false,
       type: state.type || 'unknown'
     };
 
+    const isNowOnline = this.currentState.isConnected && this.currentState.isInternetReachable;
+
+    // Detectar transición offline → online
+    if (!wasOnline && isNowOnline) {
+      console.log('📶 Conexión restaurada — disparando sincronización automática');
+      this.reconnectCallbacks.forEach(cb => {
+        try { cb(); } catch {}
+      });
+    }
+
     // Notificar a todos los listeners
     this.listeners.forEach(listener => listener(this.currentState));
+  }
+
+  // Registrar callback para cuando se restaure la conexión
+  onReconnect(callback: () => void): () => void {
+    this.reconnectCallbacks.push(callback);
+    return () => {
+      const i = this.reconnectCallbacks.indexOf(callback);
+      if (i > -1) this.reconnectCallbacks.splice(i, 1);
+    };
   }
 
   // Obtener estado actual

@@ -11,6 +11,7 @@ import { Skeleton } from '../../components/ui/skeleton';
 import { Text } from '../../components/ui/text';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { supabase } from '../../lib/supabase';
+import { useSessionGuard } from '../../hooks/useSessionGuard';
 import { useConnectivity } from '../../services/connectivityService';
 import { choferService } from '../../services/choferService';
 import { PrestacionCompleta, prestacionService } from '../../services/prestacionService';
@@ -20,7 +21,7 @@ import moment from 'moment-timezone';
 export default function DashboardPage() {
     const insets = useSafeAreaInsets();
     const connectivity = useConnectivity();
-    const [session, setSession] = useState<Session | null>(null);
+    const { session } = useSessionGuard(() => router.replace('/'));
     const [isChoferUser, setIsChoferUser] = useState(false);
     const [prestacionesCompletadas, setPrestacionesCompletadas] = useState<PrestacionCompleta[]>([]);
     const [prestacionesPendientes, setPrestacionesPendientes] = useState<PrestacionCompleta[]>([]);
@@ -34,23 +35,6 @@ export default function DashboardPage() {
 
     const [isOffline, setIsOffline] = useState(false);
 
-    useEffect(() => {
-        supabase.auth.getSession().then(({ data: { session } }) => {
-            setSession(session);
-            if (!session) {
-                router.replace('/');
-            }
-        });
-
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-            setSession(session);
-            if (!session) {
-                router.replace('/');
-            }
-        });
-
-        return () => subscription.unsubscribe();
-    }, []);
 
     useEffect(() => {
         if (session) {

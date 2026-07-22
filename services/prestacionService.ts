@@ -88,7 +88,8 @@ export interface SugerenciaOffline {
 
 export interface PrestacionOffline {
   prestacion_id: string;
-  accion?: 'cerrar' | 'transporte_iniciar' | 'transporte_finalizar';
+  prestacion_ids?: string[];
+  accion?: 'cerrar' | 'transporte_iniciar' | 'transporte_finalizar' | 'centro_validar';
   ubicacion_lat: number;
   ubicacion_lng: number;
   notas: string;
@@ -940,7 +941,7 @@ class PrestacionService {
   ): Promise<ValidacionUbicacion> {
     try {
       const esKine = this.esTipoKinesiologo(tipoPrestacion);
-      const minDuracion = esKine ? 40 : 30;
+      const minDuracion = esKine ? 30 : 40;
 
       // Obtener started_at desde cache o AsyncStorage
       const cachedData = await this.obtenerDeCache();
@@ -999,6 +1000,22 @@ class PrestacionService {
     } catch (error) {
       console.error('Error cerrando prestación domicilio:', error);
       return { exito: false, mensaje: 'No se pudo completar la prestación. Intentá nuevamente.', distancia_metros: 0 };
+    }
+  }
+
+  // Horas acumuladas del mes por paciente para el AT logueado
+  async obtenerHorasAcumuladasMes(): Promise<Record<string, number>> {
+    try {
+      const { data, error } = await supabase.rpc('obtener_horas_acumuladas_mes');
+      if (error) throw error;
+      const resultado: Record<string, number> = {};
+      for (const row of (data || [])) {
+        resultado[row.paciente_id] = Math.round(Number(row.minutos));
+      }
+      return resultado;
+    } catch (error) {
+      console.error('Error obteniendo horas acumuladas:', error);
+      return {};
     }
   }
 
@@ -1226,6 +1243,18 @@ class PrestacionService {
               prestacion.ubicacion_lng,
               prestacion.notas
             );
+          } else if (prestacion.accion === 'centro_validar') {
+            const ids = prestacion.prestacion_ids || [prestacion.prestacion_id];
+            const res = await this.validarPrestacionesCentro(
+              ids,
+              prestacion.ubicacion_lat,
+              prestacion.ubicacion_lng
+            );
+            resultado = {
+              exito: res.exito,
+              mensaje: res.mensaje,
+              distancia_metros: res.distancia_metros ?? 0,
+            };
           } else {
             resultado = await this.cerrarPrestacionConValidacion(
               prestacion.prestacion_id,
@@ -1556,9 +1585,24 @@ class PrestacionService {
       const isOnline = await connectivityService.isOnline();
 
       if (!isOnline) {
+        const timestamp = new Date().toISOString();
+        await this.guardarPrestacionOffline({
+          prestacion_id: prestacionIds[0],
+          prestacion_ids: prestacionIds,
+          accion: 'centro_validar',
+          ubicacion_lat: ubicacionLat,
+          ubicacion_lng: ubicacionLng,
+          notas: '',
+          timestamp,
+          distancia_metros: 0,
+        });
+        for (const id of prestacionIds) {
+          await this.actualizarCacheTransporte(id, 'finalizar');
+        }
         return {
-          exito: false,
-          mensaje: 'La validación grupal requiere conexión a internet'
+          exito: true,
+          mensaje: `${prestacionIds.length} prestación(es) guardada(s) sin conexión. Se sincronizarán automáticamente cuando haya internet.`,
+          prestaciones_validadas: prestacionIds.length,
         };
       }
 

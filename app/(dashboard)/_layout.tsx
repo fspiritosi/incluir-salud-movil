@@ -4,12 +4,23 @@ import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import React, { useEffect, useState } from 'react';
 import { choferService } from '../../services/choferService';
+import { connectivityService } from '../../services/connectivityService';
+import { prestacionService } from '../../services/prestacionService';
+import { jornadaService } from '../../services/jornadaService';
 
 type DashboardMode = 'unknown' | 'transporte' | 'prestaciones';
 
 export default function DashboardLayout() {
   const insets = useSafeAreaInsets();
   const [mode, setMode] = useState<DashboardMode>('unknown');
+
+  useEffect(() => {
+    const unsubscribeSync = connectivityService.onReconnect(() => {
+      prestacionService.sincronizarTodo().catch(() => {});
+      jornadaService.sincronizarJornadasOffline().catch(() => {});
+    });
+    return unsubscribeSync;
+  }, []);
 
   useEffect(() => {
     let mounted = true;

@@ -23,6 +23,7 @@ import { Card, CardContent, CardHeader } from '../../components/ui/card';
 import { Skeleton } from '../../components/ui/skeleton';
 import { Text } from '../../components/ui/text';
 import { supabase } from '../../lib/supabase';
+import { useSessionGuard } from '../../hooks/useSessionGuard';
 import { PrestacionCompleta, prestacionService } from '../../services/prestacionService';
 import { useConnectivity } from '../../services/connectivityService';
 import { choferService } from '../../services/choferService';
@@ -60,7 +61,7 @@ function esFechaFutura(fecha: string) {
 export default function TransportePage() {
   const insets = useSafeAreaInsets();
   const connectivity = useConnectivity();
-  const [session, setSession] = useState<Session | null>(null);
+  const { session } = useSessionGuard(() => router.replace('/'));
   const [isTransportista, setIsTransportista] = useState<boolean>(false);
   const [isChoferUser, setIsChoferUser] = useState<boolean>(false);
   const [choferLabelById, setChoferLabelById] = useState<Record<string, string>>({});
@@ -82,19 +83,6 @@ export default function TransportePage() {
   const [confirmSuggestOpen, setConfirmSuggestOpen] = useState(false);
   const [prestacionParaSugerir, setPrestacionParaSugerir] = useState<PrestacionCompleta | null>(null);
 
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (!session) router.replace('/');
-    });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (!session) router.replace('/');
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
 
   useEffect(() => {
     if (session) {
