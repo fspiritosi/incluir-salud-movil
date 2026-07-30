@@ -123,6 +123,13 @@ class JornadaService {
       const now = new Date().toISOString();
       const online = await this.isOnline();
 
+      // Obtener user_id para el insert
+      let userId: string | undefined;
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        userId = user?.id;
+      } catch { /* se usará el default auth.uid() en la DB */ }
+
       if (!online) {
         const idOffline = `offline_${Date.now()}`;
         await this.guardarOffline({
@@ -153,6 +160,7 @@ class JornadaService {
       const { data, error } = await supabase
         .from('jornadas_residencia')
         .insert({
+          ...(userId && { user_id: userId }),
           centro_id: centroId,
           fecha: this.hoyAR(),
           entrada_at: now,

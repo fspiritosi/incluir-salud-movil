@@ -75,6 +75,14 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
 
   const [confirmSuggestOpen, setConfirmSuggestOpen] = useState(false);
 
+  // Estado para cierre anticipado
+  const [cierreAnticipadoModalOpen, setCierreAnticipadoModalOpen] = useState(false);
+  const [motivoCierreAnticipado, setMotivoCierreAnticipado] = useState('');
+  const [minutosActuales, setMinutosActuales] = useState(0);
+  const [minutosMinimos, setMinutosMinimos] = useState(0);
+  const [ubicacionCierre, setUbicacionCierre] = useState<LocationData | null>(null);
+  const [loadingCierreAnticipado, setLoadingCierreAnticipado] = useState(false);
+
   // Estado para ubicación actual (para direcciones)
   const [currentLocation, setCurrentLocation] = useState<LocationData | null>(null);
   const [tiempoTranscurrido, setTiempoTranscurrido] = useState('');
@@ -137,6 +145,13 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
           setSuccessTitle('¡Prestación Completada!');
           setSuccessMessage('La prestación se completó exitosamente.');
           setSuccessModalOpen(true);
+        } else if (resultado.mensaje.startsWith('DURACION_INSUFICIENTE|')) {
+          const partes = resultado.mensaje.split('|');
+          setMinutosActuales(parseInt(partes[1], 10));
+          setMinutosMinimos(parseInt(partes[2], 10));
+          setUbicacionCierre(ubicacion);
+          setMotivoCierreAnticipado('');
+          setCierreAnticipadoModalOpen(true);
         } else {
           setValidationErrorMessage(resultado.mensaje);
           setValidationErrorModalOpen(true);
@@ -335,6 +350,37 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
     setConfirmSuggestOpen(true);
   };
 
+  const handleConfirmarCierreAnticipado = async () => {
+    if (!motivoCierreAnticipado.trim() || !ubicacionCierre || !prestacion) return;
+    try {
+      setLoadingCierreAnticipado(true);
+      const resultado = await prestacionService.cerrarPrestacionDomicilio(
+        prestacion.prestacion_id,
+        ubicacionCierre.latitude,
+        ubicacionCierre.longitude,
+        prestacion.tipo_prestacion,
+        notas,
+        true,
+        motivoCierreAnticipado.trim()
+      );
+      setCierreAnticipadoModalOpen(false);
+      if (resultado.exito) {
+        setSuccessTitle('Prestación cerrada anticipadamente');
+        setSuccessMessage('La prestación se cerró con cierre anticipado. El motivo quedó registrado.');
+        setSuccessModalOpen(true);
+      } else {
+        setValidationErrorMessage(resultado.mensaje);
+        setValidationErrorModalOpen(true);
+      }
+    } catch (error) {
+      setCierreAnticipadoModalOpen(false);
+      setErrorMessage('Error cerrando la prestación. Intentá nuevamente.');
+      setErrorModalOpen(true);
+    } finally {
+      setLoadingCierreAnticipado(false);
+    }
+  };
+
   return (
     <>
       <Dialog open={visible} onOpenChange={onClose}>
@@ -372,6 +418,7 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
                       </Button>
                     </View>
 
+                    {!esEnProceso && (
                     <View className="flex-row items-center gap-2">
                       <Button
                         variant="outline"
@@ -396,6 +443,7 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
                         </View>
                       </Button>
                     </View>
+                    )}
 
                     <View className="flex-row items-center gap-2">
                       <Phone size={14} color="#6b7280" />
@@ -549,6 +597,7 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
               </AlertDialogAction>
             )}
 
+            {!esEnProceso && (
             <AlertDialogAction
               onPress={handleConfirmSuggest}
               disabled={suggestingLocation}
@@ -561,6 +610,7 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
                 </Text>
               </View>
             </AlertDialogAction>
+            )}
 
             <AlertDialogAction onPress={handleContactSupport}>
               <Text className="text-white font-medium">Contactar Soporte</Text>
@@ -614,6 +664,43 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
             >
               <Text>Confirmar</Text>
             </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Modal de Cierre Anticipado */}
+      <AlertDialog open={cierreAnticipadoModalOpen} onOpenChange={setCierreAnticipadoModalOpen}>
+        <AlertDialogContent className="max-w-sm mx-6">
+          <AlertDialogHeader>
+            <View style={styles.modalIconContainer}>
+              <Clock size={48} color="#f59e0b" />
+              <AlertDialogTitle style={styles.modalTitle}>Duración insuficiente</AlertDialogTitle>
+            </View>
+            <AlertDialogDescription style={styles.modalDescription}>
+              {`Llevás ${minutosActuales} minutos (mínimo requerido: ${minutosMinimos} min).\n\n¿Querés cerrar la prestación de todas formas? Debés indicar el motivo.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <View className="px-4 pb-2">
+            <Textarea
+              placeholder="Motivo del cierre anticipado (obligatorio)..."
+              value={motivoCierreAnticipado}
+              onChangeText={setMotivoCierreAnticipado}
+              className="min-h-20"
+            />
+          </View>
+          <AlertDialogFooter style={styles.modalFooterColumn}>
+            <AlertDialogAction
+              onPress={handleConfirmarCierreAnticipado}
+              disabled={!motivoCierreAnticipado.trim() || loadingCierreAnticipado}
+              style={{ backgroundColor: '#f59e0b' }}
+            >
+              <Text className="text-white font-medium">
+                {loadingCierreAnticipado ? 'Cerrando...' : 'Cerrar con motivo'}
+              </Text>
+            </AlertDialogAction>
+            <AlertDialogCancel onPress={() => setCierreAnticipadoModalOpen(false)}>
+              <Text>Cancelar</Text>
+            </AlertDialogCancel>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

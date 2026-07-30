@@ -150,6 +150,13 @@ export default function DashboardLayout() {
           href: null,
         }}
       />
+      <Tabs.Screen
+        name="reporte-residencia"
+        options={{
+          title: 'Reporte de Residencia',
+          href: null,
+        }}
+      />
     </Tabs>
   );
 }

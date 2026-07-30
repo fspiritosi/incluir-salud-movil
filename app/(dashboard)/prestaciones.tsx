@@ -7,6 +7,7 @@ import {
   MapPin,
   Phone,
   Play,
+  Timer,
   Wifi,
   WifiOff,
   Search
@@ -176,17 +177,13 @@ export default function PrestacionesPage() {
             resultado = await prestacionService.obtenerPrestacionesUltimaSemana(undefined, forceRefresh);
         }
       } catch (filterError) {
-        // Si falla y estamos offline, intentar cargar al menos el día actual como fallback
-        if (!connectivity.isConnected) {
-          console.log('⚠️ Error cargando con filtro seleccionado, intentando fallback a día actual...');
-          try {
-            resultado = await prestacionService.obtenerPrestacionesDelDia(undefined, false);
-            console.log('✅ Fallback exitoso: usando cache del día actual');
-          } catch (fallbackError) {
-            throw filterError; // Lanzar el error original si el fallback también falla
-          }
-        } else {
-          throw filterError; // Si hay conexión, lanzar el error
+        // Si falla, intentar cargar al menos el día actual como fallback
+        console.log('⚠️ Error cargando con filtro seleccionado, intentando fallback a día actual...');
+        try {
+          resultado = await prestacionService.obtenerPrestacionesDelDia(undefined, false);
+          console.log('✅ Fallback exitoso: usando cache del día actual');
+        } catch (fallbackError) {
+          throw filterError; // Lanzar el error original si el fallback también falla
         }
       }
 
@@ -415,6 +412,17 @@ export default function PrestacionesPage() {
       lastWeek: 'DD/MM',
       sameElse: 'DD/MM'
     });
+  };
+
+  const calcularDuracion = (startedAt?: string, completedAt?: string) => {
+    if (!startedAt || !completedAt) return null;
+    const inicio = moment(startedAt);
+    const fin = moment(completedAt);
+    const minutos = fin.diff(inicio, 'minutes');
+    if (minutos <= 0) return null;
+    const h = Math.floor(minutos / 60);
+    const m = minutos % 60;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
   };
 
   const llamarPaciente = (telefono: string) => {
@@ -755,7 +763,7 @@ export default function PrestacionesPage() {
                       <CardHeader className="pb-3">
                         <View className="flex-row justify-between items-start gap-2">
                           <View className="flex-1 flex-shrink">
-                            <Text variant="large" className="font-semibold" numberOfLines={2}>
+                            <Text variant="large" className="font-semibold">
                               {prestacion.tipo_prestacion.charAt(0).toUpperCase() + prestacion.tipo_prestacion.slice(1)}
                             </Text>
                             <Text variant="small" className="text-muted-foreground font-medium">
@@ -989,6 +997,14 @@ export default function PrestacionesPage() {
                           {formatDayAndTime(prestacion.fecha)}
                         </Text>
                       </View>
+                      {calcularDuracion(prestacion.started_at, prestacion.completed_at) && (
+                        <View className="flex-row items-center gap-1">
+                          <Timer size={14} className="text-muted-foreground" />
+                          <Text variant="small" className="text-muted-foreground">
+                            {calcularDuracion(prestacion.started_at, prestacion.completed_at)}
+                          </Text>
+                        </View>
+                      )}
                       <Badge variant="default" className="flex-row items-center gap-1">
                         <CheckCircle size={12} className="text-primary-foreground" />
                         <Text className="text-xs text-primary-foreground font-medium">Completada</Text>

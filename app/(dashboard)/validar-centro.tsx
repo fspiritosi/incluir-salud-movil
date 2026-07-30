@@ -176,7 +176,10 @@ export default function ValidarCentroPage() {
     useCallback(() => {
       setRefreshing(true);
       (async () => {
-        jornadaService.sincronizarJornadasOffline().catch(() => {});
+        await Promise.all([
+          jornadaService.sincronizarJornadasOffline().catch(() => {}),
+          prestacionService.sincronizarPrestacionesOffline().catch(() => {})
+        ]);
         await Promise.all([loadPrestaciones(), loadJornada()]);
         setRefreshing(false);
       })();
@@ -185,8 +188,11 @@ export default function ValidarCentroPage() {
 
   const onRefresh = async () => {
     setRefreshing(true);
+    await Promise.all([
+      jornadaService.sincronizarJornadasOffline().catch(() => {}),
+      prestacionService.sincronizarPrestacionesOffline().catch(() => {})
+    ]);
     await Promise.all([loadPrestaciones(), loadJornada()]);
-    jornadaService.sincronizarJornadasOffline().catch(() => {});
     setRefreshing(false);
   };
 
@@ -226,10 +232,64 @@ export default function ValidarCentroPage() {
     }
   };
 
+  const validarSeleccionadas = async (): Promise<{ exito: boolean; mensaje: string; detalle?: any }> => {
+    if (selectedIds.size === 0) {
+      return { exito: false, mensaje: 'Seleccioná al menos una prestación para validar' };
+    }
+
+    const selectedPrestaciones = prestaciones.filter(p => selectedIds.has(p.prestacion_id));
+    const bloqueadas = selectedPrestaciones.filter(p => (p as any).paciente_completo_hoy);
+
+    if (bloqueadas.length > 0) {
+      const detalle = bloqueadas
+        .map(p => `• ${p.paciente_apellido}, ${p.paciente_nombre}`)
+        .join('\n');
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        bloqueadas.forEach(p => next.delete(p.prestacion_id));
+        return next;
+      });
+      return {
+        exito: false,
+        mensaje: 'Hay pacientes que ya alcanzaron su límite diario. Quítalos de la selección para continuar.',
+        detalle
+      };
+    }
+
+    const ubicacion = await requestLocation();
+    if (!ubicacion) {
+      return { exito: false, mensaje: 'No se pudo obtener tu ubicación. Verificá GPS y permisos.' };
+    }
+
+    console.log('📍 Ubicación del usuario:', {
+      latitude: ubicacion.latitude,
+      longitude: ubicacion.longitude,
+      accuracy: ubicacion.accuracy
+    });
+
+    const result = await prestacionService.validarPrestacionesCentro(
+      Array.from(selectedIds),
+      ubicacion.latitude,
+      ubicacion.longitude
+    );
+
+    return result;
+  };
+
   const handleFinalizarJornada = async () => {
     if (!jornadaActiva) return;
+    setFinalizandoJornada(true);
     try {
-      setFinalizandoJornada(true);
+      if (selectedIds.size > 0) {
+        const result = await validarSeleccionadas();
+        if (!result.exito) {
+          setErrorMessage(result.mensaje);
+          setErrorDetail(result.detalle ? JSON.stringify(result.detalle, null, 2) : null);
+          setErrorModalOpen(true);
+          return;
+        }
+      }
+
       const resultado = await jornadaService.finalizarJornada(jornadaActiva.id, jornadaActiva.entrada_at);
       if (resultado.exito) {
         setJornadaActiva(null);
@@ -345,12 +405,6 @@ export default function ValidarCentroPage() {
       return;
     }
 
-    if (!connectivity.isConnected) {
-      setErrorMessage('La validación grupal requiere conexión a internet');
-      setErrorModalOpen(true);
-      return;
-    }
-
     try {
       setValidating(true);
 
@@ -375,6 +429,20 @@ export default function ValidarCentroPage() {
       );
 
       if (result.exito) {
+        // Al validar también se cierra la jornada
+        if (jornadaActiva) {
+          const resultado = await jornadaService.finalizarJornada(jornadaActiva.id, jornadaActiva.entrada_at);
+          if (resultado.exito) {
+            setJornadaActiva(null);
+            const mins = await jornadaService.obtenerHorasJornadasMes(String(centroId));
+            setHorasJornadaMes(mins);
+          } else {
+            setErrorMessage(resultado.mensaje);
+            setErrorDetail(null);
+            setErrorModalOpen(true);
+            return;
+          }
+        }
         setSuccessModalContext('validacion');
         setSuccessMessage(result.mensaje);
         setSuccessModalOpen(true);
