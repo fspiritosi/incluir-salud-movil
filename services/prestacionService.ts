@@ -782,6 +782,8 @@ class PrestacionService {
         throw new Error('Prestación no encontrada en cache');
       }
 
+      const esAT = this.esTipoAT(prestacion.tipo_prestacion);
+
       let targetLat: number;
       let targetLng: number;
       let radioEfectivo = radioPermitido;
@@ -808,21 +810,23 @@ class PrestacionService {
             targetLat = sugerencia.ubicacion_lat;
             targetLng = sugerencia.ubicacion_lng;
             ubicacionDescripcion = 'paciente (ubicación sugerida pendiente)';
-          } else {
+          } else if (!esAT) {
             throw new Error('El paciente no tiene ubicación registrada ni sugerida');
           }
         }
       }
 
       // Calcular distancia
-      const distancia = this.calcularDistancia(
-        ubicacionLat,
-        ubicacionLng,
-        targetLat,
-        targetLng
-      );
+      const distancia = (esAT && (typeof targetLat !== 'number' || typeof targetLng !== 'number'))
+        ? 0
+        : this.calcularDistancia(
+            ubicacionLat,
+            ubicacionLng,
+            targetLat,
+            targetLng
+          );
 
-      const dentroDelRango = distancia <= radioEfectivo;
+      const dentroDelRango = esAT || distancia <= radioEfectivo;
 
       return {
         exito: dentroDelRango,

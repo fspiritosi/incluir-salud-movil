@@ -32,6 +32,7 @@ type JornadaOffline = {
 
 class JornadaService {
   private readonly OFFLINE_KEY = 'jornadas_offline';
+  private readonly ACTIVA_KEY = 'jornada_activa_cache';
 
   private hoyAR(): string {
     return moment().tz(TIMEZONE).format('YYYY-MM-DD');
@@ -87,25 +88,76 @@ class JornadaService {
     }
   }
 
-  async obtenerJornadaActivaHoy(centroId: string): Promise<JornadaResidencia | null> {
-    // Siempre revisar AsyncStorage primero (cubre el caso offline o recién sincronizado)
-    const jornadaOffline = await this.obtenerJornadaOfflinePendiente(centroId);
-    if (jornadaOffline) return jornadaOffline;
-
+  private async guardarJornadaActiva(jornada: JornadaResidencia): Promise<void> {
     try {
-      const { data, error } = await supabase
-        .from('jornadas_residencia')
-        .select('*')
-        .eq('centro_id', centroId)
-        .eq('fecha', this.hoyAR())
-        .eq('estado', 'iniciada')
-        .maybeSingle();
+      await AsyncStorage.setItem(this.ACTIVA_KEY, JSON.stringify(jornada));
+    } catch {
+      // No crítico
+    }
+  }
 
-      if (error) throw error;
-      return data;
+  private async obtenerJornadaActiva(centroId: string): Promise<JornadaResidencia | null> {
+    try {
+      const raw = await AsyncStorage.getItem(this.ACTIVA_KEY);
+      if (!raw) return null;
+      const jornada: JornadaResidencia = JSON.parse(raw);
+      if (jornada.centro_id === centroId && jornada.fecha === this.hoyAR() && jornada.estado === 'iniciada') {
+        return jornada;
+      }
+      return null;
     } catch {
       return null;
     }
+  }
+
+  private async limpiarJornadaActiva(): Promise<void> {
+    try {
+      await AsyncStorage.removeItem(this.ACTIVA_KEY);
+    } catch {
+      // No crítico
+    }
+  }
+
+  async obtenerJornadaActivaHoy(centroId: string): Promise<JornadaResidencia | null> {
+    // 1) Jornada offline aún no sincronizada
+    const jornadaOffline = await this.obtenerJornadaOfflinePendiente(centroId);
+    if (jornadaOffline) return jornadaOffline;
+
+    // 2) Si hay internet, traer del servidor y persistir en cache
+    const isOnline = await this.isOnline();
+    if (isOnline) {
+      let userId: string | null = null;
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        userId = session?.user?.id ?? null;
+      } catch {
+        userId = null;
+      }
+
+      if (userId) {
+        try {
+          const { data, error } = await supabase
+            .from('jornadas_residencia')
+            .select('*')
+            .eq('user_id', userId)
+            .eq('centro_id', centroId)
+            .eq('fecha', this.hoyAR())
+            .eq('estado', 'iniciada')
+            .order('entrada_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (error) throw error;
+          if (data) await this.guardarJornadaActiva(data);
+          return data;
+        } catch {
+          // Si falla el server, caer al cache
+        }
+      }
+    }
+
+    // 3) Fallback offline: cache de la última jornada activa online
+    return this.obtenerJornadaActiva(centroId);
   }
 
   async iniciarJornada(
@@ -129,6 +181,12 @@ class JornadaService {
         const { data: { user } } = await supabase.auth.getUser();
         userId = user?.id;
       } catch { /* se usará el default auth.uid() en la DB */ }
+      if (!userId) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          userId = session?.user?.id;
+        } catch { /* se dejará sin user_id */ }
+      }
 
       if (!online) {
         const idOffline = `offline_${Date.now()}`;
@@ -173,6 +231,8 @@ class JornadaService {
 
       if (error) throw error;
 
+      await this.guardarJornadaActiva(data);
+
       return { exito: true, mensaje: 'Jornada iniciada correctamente.', jornada: data };
     } catch (error) {
       console.error('Error iniciando jornada:', error);
@@ -216,6 +276,8 @@ class JornadaService {
 
       if (error) throw error;
 
+      await this.limpiarJornadaActiva();
+
       const duracion = moment(data.salida_at).diff(moment(data.entrada_at), 'minutes');
 
       return {
@@ -242,12 +304,19 @@ class JornadaService {
       let sincronizadas = 0;
       let jornadaDbId: string | null = null;
 
+      let userId: string | undefined;
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        userId = session?.user?.id;
+      } catch { /* offline: se sincronizará sin user_id */ }
+
       for (const item of lista) {
         try {
           if (item.accion === 'iniciar') {
             const { data, error } = await supabase
               .from('jornadas_residencia')
               .insert({
+                ...(userId && { user_id: userId }),
                 centro_id: item.centro_id,
                 fecha: item.fecha,
                 entrada_at: item.entrada_at,
