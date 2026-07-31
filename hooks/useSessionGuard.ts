@@ -39,7 +39,7 @@ export function useSessionGuard(onNoSession: () => void) {
       }
 
       // No hay sesión activa — verificar si estamos offline con backup
-      const isOnline = connectivityService.getCurrentState().isConnected;
+      const isOnline = await connectivityService.isOnline();
       if (!isOnline) {
         try {
           const raw = await AsyncStorage.getItem(BACKUP_KEY);
@@ -74,7 +74,7 @@ export function useSessionGuard(onNoSession: () => void) {
       }
 
       if (event === 'SIGNED_OUT') {
-        const isOnline = connectivityService.getCurrentState().isConnected;
+        const isOnline = await connectivityService.isOnline();
 
         if (!isOnline && lastSession.current) {
           // JWT expiró sin internet — mantener sesión en memoria, no redirigir

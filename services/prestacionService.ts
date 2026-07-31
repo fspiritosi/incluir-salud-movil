@@ -340,16 +340,9 @@ class PrestacionService {
         return null;
       }
 
-      // Verificar si el cache no está muy viejo (para modo online)
+      // El cache no expira: los datos mensuales permanecen hasta actualizarse desde el servidor.
       const cacheAge = Date.now() - parseInt(timestamp);
-      const isOnline = await connectivityService.isOnline();
-
-      if (isOnline && cacheAge > this.CACHE_DURATION) {
-        console.log('⏰ Cache expirado, necesita actualización');
-        return null;
-      }
-
-      console.log(`📦 Usando cache ${isOnline ? '(online - cache fresco)' : '(offline)'}`);
+      console.log(`📦 Usando cache local (última actualización hace ${Math.round(cacheAge / 60000)} min)`);
       return JSON.parse(cachedData);
     } catch (error) {
       console.error('Error leyendo cache:', error);

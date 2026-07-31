@@ -1,4 +1,6 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
+import { connectivityService } from './connectivityService';
 
 export type ChoferRow = {
   userId: string;
@@ -122,10 +124,32 @@ export const choferService = {
     return tipoUsuario === 'prestador' && tipoPrestador !== 'transporte';
   },
 
+  LANDING_ROUTE_KEY: 'landing_route_cache',
+
   async getLandingRoute(): Promise<'/(dashboard)/dashboard' | '/(dashboard)/transporte'> {
-    const isC = await this.isChofer();
-    if (isC) return '/(dashboard)/transporte';
-    return '/(dashboard)/dashboard';
+    const isOnline = connectivityService.isCurrentlyOnline();
+
+    if (!isOnline) {
+      try {
+        const cached = await AsyncStorage.getItem(this.LANDING_ROUTE_KEY);
+        if (cached) {
+          console.log('📡 Usando landing route cacheada:', cached);
+          return cached as '/(dashboard)/dashboard' | '/(dashboard)/transporte';
+        }
+      } catch {
+        // Sin cache, fallback por defecto
+      }
+      return '/(dashboard)/dashboard';
+    }
+
+    try {
+      const isC = await this.isChofer();
+      const route = isC ? '/(dashboard)/transporte' : '/(dashboard)/dashboard';
+      await AsyncStorage.setItem(this.LANDING_ROUTE_KEY, route).catch(() => {});
+      return route;
+    } catch {
+      return '/(dashboard)/dashboard';
+    }
   },
 
   async listChoferes(): Promise<ChoferRow[]> {

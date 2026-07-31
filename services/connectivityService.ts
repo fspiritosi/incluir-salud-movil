@@ -67,7 +67,12 @@ class ConnectivityService {
     return this.currentState;
   }
 
-  // Verificar si hay conexión a internet
+  // Estado online actual sincrónico (isConnected && isInternetReachable)
+  isCurrentlyOnline(): boolean {
+    return this.currentState.isConnected && this.currentState.isInternetReachable;
+  }
+
+  // Verificar si hay conexión a internet con fetch fresco
   async isOnline(): Promise<boolean> {
     const state = await NetInfo.fetch();
     return state.isConnected && state.isInternetReachable;

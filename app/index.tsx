@@ -29,7 +29,7 @@ export default function IndexPage() {
       }
 
       // Sin sesión — verificar si estamos offline con backup previo
-      const isOnline = connectivityService.getCurrentState().isConnected;
+      const isOnline = await connectivityService.isOnline();
       if (!isOnline) {
         try {
           const raw = await AsyncStorage.getItem(BACKUP_KEY);

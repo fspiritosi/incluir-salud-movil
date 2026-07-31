@@ -126,13 +126,16 @@ export default function PrestacionesPage() {
         setRefreshing(true);
         (async () => {
           try {
-            if (connectivity.isConnected) {
+            const isOnline = connectivity.isConnected && connectivity.isInternetReachable;
+            if (isOnline) {
+              // Sincronización en segundo plano; no bloquea la carga de datos locales
+              prestacionService.sincronizarPrestacionesOffline().then((sincronizadas: SincronizacionResult) => {
+                if (sincronizadas > 0) {
+                  setSuccessMessage(`Se sincronizaron ${sincronizadas} prestaciones offline`);
+                  setSuccessModalOpen(true);
+                }
+              }).catch(() => {});
               jornadaService.sincronizarJornadasOffline().catch(() => {});
-              const sincronizadas: SincronizacionResult = await prestacionService.sincronizarPrestacionesOffline();
-              if (sincronizadas > 0) {
-                setSuccessMessage(`Se sincronizaron ${sincronizadas} prestaciones offline`);
-                setSuccessModalOpen(true);
-              }
             }
             await loadPrestaciones(true);
             await checkPrestacionesOffline();

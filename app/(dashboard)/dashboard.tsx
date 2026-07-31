@@ -122,7 +122,7 @@ export default function DashboardPage() {
             console.error('Error loading dashboard data:', error);
 
             // Si falla, intentar usar solo cache del día actual
-            if (!connectivity.isConnected) {
+            if (!connectivity.isConnected || !connectivity.isInternetReachable) {
                 try {
                     const datosDelDia = await prestacionService.obtenerPrestacionesDelDia(undefined, false);
                     if (datosDelDia.isFromCache) {
@@ -145,7 +145,7 @@ export default function DashboardPage() {
     const onRefresh = async () => {
         setRefreshing(true);
 
-        if (connectivity.isConnected) {
+        if (connectivity.isConnected && connectivity.isInternetReachable) {
             // Si hay conexión, forzar actualización
             await loadDashboardData(true);
         } else {
