@@ -6,6 +6,8 @@ import {
   Loader2,
   MapPin,
   Phone,
+  Play,
+  Timer,
   Wifi,
   WifiOff,
   Search
@@ -39,6 +41,8 @@ import { supabase } from '../../lib/supabase';
 import { useLocation } from '../../hooks/useLocation';
 import { useConnectivity } from '../../services/connectivityService';
 import { choferService } from '../../services/choferService';
+import { jornadaService } from '../../services/jornadaService';
+import { useSessionGuard } from '../../hooks/useSessionGuard';
 import {
   ObtenerPrestacionesMesResult,
   ObtenerPrestacionesRangoResult,
@@ -54,7 +58,7 @@ export default function PrestacionesPage() {
   const insets = useSafeAreaInsets();
   const connectivity = useConnectivity();
   const { requestLocation } = useLocation();
-  const [session, setSession] = useState<Session | null>(null);
+  const { session } = useSessionGuard(() => router.replace('/'));
   const [isChoferUser, setIsChoferUser] = useState(false);
   const [prestacionesPendientes, setPrestacionesPendientes] = useState<PrestacionCompleta[]>([]);
   const [prestacionesCompletadas, setPrestacionesCompletadas] = useState<PrestacionCompleta[]>([]);
@@ -83,27 +87,16 @@ export default function PrestacionesPage() {
 
   const [confirmSuggestOpen, setConfirmSuggestOpen] = useState(false);
   const [prestacionParaSugerir, setPrestacionParaSugerir] = useState<PrestacionCompleta | null>(null);
+  const [iniciandoId, setIniciandoId] = useState<string | null>(null);
+  const [horasAcumuladas, setHorasAcumuladas] = useState<Record<string, number>>({});
 
   const esPrestacionTransporte = (prestacion: PrestacionCompleta) =>
     String(prestacion.tipo_prestacion || '').toLowerCase() === 'transporte';
 
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (!session) {
-        router.replace('/');
-      }
-    });
+  const esPrestacionDomicilio = (prestacion: PrestacionCompleta) =>
+    prestacionService.esTipoAT(prestacion.tipo_prestacion) ||
+    prestacionService.esTipoKinesiologo(prestacion.tipo_prestacion);
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (!session) {
-        router.replace('/');
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
 
   useEffect(() => {
     if (session) {
@@ -133,12 +126,16 @@ export default function PrestacionesPage() {
         setRefreshing(true);
         (async () => {
           try {
-            if (connectivity.isConnected) {
-              const sincronizadas: SincronizacionResult = await prestacionService.sincronizarPrestacionesOffline();
-              if (sincronizadas > 0) {
-                setSuccessMessage(`Se sincronizaron ${sincronizadas} prestaciones offline`);
-                setSuccessModalOpen(true);
-              }
+            const isOnline = connectivity.isConnected && connectivity.isInternetReachable;
+            if (isOnline) {
+              // Sincronización en segundo plano; no bloquea la carga de datos locales
+              prestacionService.sincronizarPrestacionesOffline().then((sincronizadas: SincronizacionResult) => {
+                if (sincronizadas > 0) {
+                  setSuccessMessage(`Se sincronizaron ${sincronizadas} prestaciones offline`);
+                  setSuccessModalOpen(true);
+                }
+              }).catch(() => {});
+              jornadaService.sincronizarJornadasOffline().catch(() => {});
             }
             await loadPrestaciones(true);
             await checkPrestacionesOffline();
@@ -183,17 +180,13 @@ export default function PrestacionesPage() {
             resultado = await prestacionService.obtenerPrestacionesUltimaSemana(undefined, forceRefresh);
         }
       } catch (filterError) {
-        // Si falla y estamos offline, intentar cargar al menos el día actual como fallback
-        if (!connectivity.isConnected) {
-          console.log('⚠️ Error cargando con filtro seleccionado, intentando fallback a día actual...');
-          try {
-            resultado = await prestacionService.obtenerPrestacionesDelDia(undefined, false);
-            console.log('✅ Fallback exitoso: usando cache del día actual');
-          } catch (fallbackError) {
-            throw filterError; // Lanzar el error original si el fallback también falla
-          }
-        } else {
-          throw filterError; // Si hay conexión, lanzar el error
+        // Si falla, intentar cargar al menos el día actual como fallback
+        console.log('⚠️ Error cargando con filtro seleccionado, intentando fallback a día actual...');
+        try {
+          resultado = await prestacionService.obtenerPrestacionesDelDia(undefined, false);
+          console.log('✅ Fallback exitoso: usando cache del día actual');
+        } catch (fallbackError) {
+          throw filterError; // Lanzar el error original si el fallback también falla
         }
       }
 
@@ -214,6 +207,16 @@ export default function PrestacionesPage() {
       }
 
       setIsOffline(resultado.isOffline);
+
+      // Cargar horas acumuladas del mes (si hay conexión)
+      if (!resultado.isOffline) {
+        try {
+          const horas = await prestacionService.obtenerHorasAcumuladasMes();
+          setHorasAcumuladas(horas);
+        } catch {
+          console.log('No se pudieron cargar horas acumuladas');
+        }
+      }
 
       // Si es offline y hay datos, mostrar mensaje informativo
       if (resultado.isOffline && resultado.isFromCache) {
@@ -295,6 +298,7 @@ export default function PrestacionesPage() {
     if (connectivity.isConnected) {
       // Si hay conexión, sincronizar todo
       try {
+        jornadaService.sincronizarJornadasOffline().catch(() => {});
         const resultado: SincronizacionCompletaResult = await prestacionService.sincronizarTodo();
 
         if (resultado.prestacionesSincronizadas > 0) {
@@ -325,9 +329,39 @@ export default function PrestacionesPage() {
       return;
     }
 
-    if (prestacion.estado === 'pendiente') {
+    if (prestacion.estado === 'pendiente' || prestacion.estado === 'en_proceso') {
       setPrestacionSeleccionada(prestacion);
       setModalVisible(true);
+    }
+  };
+
+  const handleIniciarPrestacion = async (prestacion: PrestacionCompleta) => {
+    try {
+      setIniciandoId(prestacion.prestacion_id);
+      const ubicacion = await requestLocation();
+      if (!ubicacion) {
+        setErrorMessage('No se pudo obtener tu ubicación. Verificá que el GPS esté activado y los permisos concedidos.');
+        setErrorModalOpen(true);
+        return;
+      }
+      const resultado = await prestacionService.iniciarPrestacionDomicilio(
+        prestacion.prestacion_id,
+        ubicacion.latitude,
+        ubicacion.longitude
+      );
+      if (resultado.exito) {
+        setSuccessMessage('Prestación iniciada. Recordá completarla al finalizar.');
+        setSuccessModalOpen(true);
+        await loadPrestaciones(true);
+      } else {
+        setErrorMessage(resultado.mensaje);
+        setErrorModalOpen(true);
+      }
+    } catch (e) {
+      setErrorMessage('No se pudo iniciar la prestación. Intentá nuevamente.');
+      setErrorModalOpen(true);
+    } finally {
+      setIniciandoId(null);
     }
   };
 
@@ -381,6 +415,17 @@ export default function PrestacionesPage() {
       lastWeek: 'DD/MM',
       sameElse: 'DD/MM'
     });
+  };
+
+  const calcularDuracion = (startedAt?: string, completedAt?: string) => {
+    if (!startedAt || !completedAt) return null;
+    const inicio = moment(startedAt);
+    const fin = moment(completedAt);
+    const minutos = fin.diff(inicio, 'minutes');
+    if (minutos <= 0) return null;
+    const h = Math.floor(minutos / 60);
+    const m = minutos % 60;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
   };
 
   const llamarPaciente = (telefono: string) => {
@@ -716,28 +761,52 @@ export default function PrestacionesPage() {
                   return (
                     <Card
                       key={prestacion.prestacion_id}
-                      className={`mb-3 ${isPrestacionVencida(prestacion.fecha) ? 'border-amber-500 bg-amber-50' : ''}`}
+                      className={`mb-3 ${prestacion.estado === 'en_proceso' ? 'border-blue-500 bg-blue-50' : isPrestacionVencida(prestacion.fecha) ? 'border-amber-500 bg-amber-50' : ''}`}
                     >
                       <CardHeader className="pb-3">
                         <View className="flex-row justify-between items-start gap-2">
                           <View className="flex-1 flex-shrink">
-                            <Text variant="large" className="font-semibold" numberOfLines={2}>
+                            <Text variant="large" className="font-semibold">
                               {prestacion.tipo_prestacion.charAt(0).toUpperCase() + prestacion.tipo_prestacion.slice(1)}
                             </Text>
                             <Text variant="small" className="text-muted-foreground font-medium">
                               {prestacion.paciente_nombre}
                             </Text>
+                            {prestacion.estado === 'en_proceso' && prestacion.started_at && (
+                              <Text variant="small" className="text-blue-600 font-medium mt-0.5">
+                                En progreso · {(() => {
+                                  const mins = Math.floor((Date.now() - new Date(prestacion.started_at!).getTime()) / 60000);
+                                  return mins >= 60 ? `${Math.floor(mins/60)}h ${mins%60}m` : `${mins}m`;
+                                })()}
+                              </Text>
+                            )}
+                            {(() => {
+                              const mins = horasAcumuladas[prestacion.paciente_id];
+                              if (!mins) return null;
+                              const h = Math.floor(mins / 60);
+                              const m = mins % 60;
+                              const label = h > 0 ? `${h}h ${m}m` : `${m}m`;
+                              return (
+                                <Text variant="small" className="text-muted-foreground mt-0.5">
+                                  Este mes: {label}
+                                </Text>
+                              );
+                            })()}
                           </View>
 
                           <View className="items-end flex-shrink-0">
                             <View className="flex-row items-center gap-2 mb-1 flex-wrap justify-end">
-                              {urgencia && (
+                              {prestacion.estado === 'en_proceso' ? (
+                                <Badge className="bg-blue-500">
+                                  <Text variant="small" className="font-semibold text-white">En progreso</Text>
+                                </Badge>
+                              ) : urgencia ? (
                                 <Badge className={`${urgencia.color}`}>
                                   <Text variant="small" className="font-semibold">
                                     {urgencia.label}
                                   </Text>
                                 </Badge>
-                              )}
+                              ) : null}
                               <View className="flex-row items-center gap-1">
                                 <Clock size={14} className="text-muted-foreground" />
                                 <Text variant="small" className="text-muted-foreground">
@@ -791,16 +860,34 @@ export default function PrestacionesPage() {
                       </View>
                     </Button>
 
-                    {/* Botón Completar: deshabilitado si es fecha futura */}
+                    {/* Botón acción según estado */}
                     {esFechaFutura(prestacion.fecha) ? (
+                      <Button size="sm" className="flex-2 opacity-50" disabled={true}>
+                        <Text className="text-xs text-primary-foreground font-medium">Programada</Text>
+                      </Button>
+                    ) : esPrestacionDomicilio(prestacion) && prestacion.estado === 'pendiente' ? (
                       <Button
                         size="sm"
-                        className="flex-2 opacity-50"
-                        disabled={true}
+                        className="flex-2 bg-green-600"
+                        onPress={() => handleIniciarPrestacion(prestacion)}
+                        disabled={iniciandoId === prestacion.prestacion_id}
                       >
-                        <Text className="text-xs text-primary-foreground font-medium">
-                          Programada
-                        </Text>
+                        <View className="flex-row items-center gap-1">
+                          {iniciandoId === prestacion.prestacion_id
+                            ? <Loader2 size={14} color="#fff" />
+                            : <Play size={14} color="#fff" />}
+                          <Text className="text-xs text-white font-medium">
+                            {iniciandoId === prestacion.prestacion_id ? 'Iniciando...' : 'Iniciar'}
+                          </Text>
+                        </View>
+                      </Button>
+                    ) : esPrestacionDomicilio(prestacion) && prestacion.estado === 'en_proceso' ? (
+                      <Button
+                        size="sm"
+                        className="flex-2"
+                        onPress={() => handlePrestacionPress(prestacion)}
+                      >
+                        <Text className="text-xs text-primary-foreground font-medium">Completar</Text>
                       </Button>
                     ) : (
                       <Button
@@ -808,13 +895,12 @@ export default function PrestacionesPage() {
                         className="flex-2"
                         onPress={() => handlePrestacionPress(prestacion)}
                       >
-                        <Text className="text-xs text-primary-foreground font-medium">
-                          Completar
-                        </Text>
+                        <Text className="text-xs text-primary-foreground font-medium">Completar</Text>
                       </Button>
                     )}
                   </View>
 
+                  {prestacion.estado !== 'en_proceso' && (
                   <View className="flex-row gap-2 items-center mt-2">
                     <Button
                       variant="outline"
@@ -845,6 +931,7 @@ export default function PrestacionesPage() {
                       </View>
                     </Button>
                   </View>
+                  )}
                 </CardContent>
               </Card>
                   );
@@ -913,6 +1000,14 @@ export default function PrestacionesPage() {
                           {formatDayAndTime(prestacion.fecha)}
                         </Text>
                       </View>
+                      {calcularDuracion(prestacion.started_at, prestacion.completed_at) && (
+                        <View className="flex-row items-center gap-1">
+                          <Timer size={14} className="text-muted-foreground" />
+                          <Text variant="small" className="text-muted-foreground">
+                            {calcularDuracion(prestacion.started_at, prestacion.completed_at)}
+                          </Text>
+                        </View>
+                      )}
                       <Badge variant="default" className="flex-row items-center gap-1">
                         <CheckCircle size={12} className="text-primary-foreground" />
                         <Text className="text-xs text-primary-foreground font-medium">Completada</Text>

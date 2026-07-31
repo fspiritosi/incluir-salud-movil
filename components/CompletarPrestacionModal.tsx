@@ -10,13 +10,15 @@ import {
   User
 } from 'lucide-react-native';
 import * as Location from 'expo-location';
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import moment from 'moment-timezone';
 import { Linking, ScrollView, View } from 'react-native';
 import { useDevMode } from '../contexts/DevModeContext';
 import { LocationData, useLocation } from '../hooks/useLocation';
 import {
   PrestacionCompleta,
   prestacionService,
+  ValidacionUbicacion,
   ValidacionUbicacionResult
 } from '../services/prestacionService';
 import {
@@ -73,8 +75,36 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
 
   const [confirmSuggestOpen, setConfirmSuggestOpen] = useState(false);
 
+  // Estado para cierre anticipado
+  const [cierreAnticipadoModalOpen, setCierreAnticipadoModalOpen] = useState(false);
+  const [motivoCierreAnticipado, setMotivoCierreAnticipado] = useState('');
+  const [minutosActuales, setMinutosActuales] = useState(0);
+  const [minutosMinimos, setMinutosMinimos] = useState(0);
+  const [ubicacionCierre, setUbicacionCierre] = useState<LocationData | null>(null);
+  const [loadingCierreAnticipado, setLoadingCierreAnticipado] = useState(false);
+
   // Estado para ubicación actual (para direcciones)
   const [currentLocation, setCurrentLocation] = useState<LocationData | null>(null);
+  const [tiempoTranscurrido, setTiempoTranscurrido] = useState('');
+
+  const esDomicilio = prestacion
+    ? (prestacionService.esTipoAT(prestacion.tipo_prestacion) || prestacionService.esTipoKinesiologo(prestacion.tipo_prestacion))
+    : false;
+  const esEnProceso = prestacion?.estado === 'en_proceso';
+  const minDuracion = prestacion && prestacionService.esTipoKinesiologo(prestacion.tipo_prestacion) ? 30 : 40;
+
+  useEffect(() => {
+    if (!esDomicilio || !esEnProceso || !prestacion?.started_at) return;
+    const actualizar = () => {
+      const mins = moment().diff(moment(prestacion.started_at), 'minutes');
+      const horas = Math.floor(mins / 60);
+      const minutos = mins % 60;
+      setTiempoTranscurrido(horas > 0 ? `${horas}h ${minutos}m` : `${mins}m`);
+    };
+    actualizar();
+    const interval = setInterval(actualizar, 30000);
+    return () => clearInterval(interval);
+  }, [esDomicilio, esEnProceso, prestacion?.started_at]);
 
   if (!prestacion) return null;
 
@@ -102,7 +132,34 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
       // Guardar ubicación actual para usar en direcciones si falla la validación
       setCurrentLocation(ubicacion);
 
-      // Validar y cerrar prestación
+      // Para AT/Kine en proceso: usar flujo domicilio
+      if (esDomicilio && esEnProceso) {
+        const resultado: ValidacionUbicacion = await prestacionService.cerrarPrestacionDomicilio(
+          prestacion.prestacion_id,
+          ubicacion.latitude,
+          ubicacion.longitude,
+          prestacion.tipo_prestacion,
+          notas
+        );
+        if (resultado.exito) {
+          setSuccessTitle('¡Prestación Completada!');
+          setSuccessMessage('La prestación se completó exitosamente.');
+          setSuccessModalOpen(true);
+        } else if (resultado.mensaje.startsWith('DURACION_INSUFICIENTE|')) {
+          const partes = resultado.mensaje.split('|');
+          setMinutosActuales(parseInt(partes[1], 10));
+          setMinutosMinimos(parseInt(partes[2], 10));
+          setUbicacionCierre(ubicacion);
+          setMotivoCierreAnticipado('');
+          setCierreAnticipadoModalOpen(true);
+        } else {
+          setValidationErrorMessage(resultado.mensaje);
+          setValidationErrorModalOpen(true);
+        }
+        return;
+      }
+
+      // Validar y cerrar prestación (flujo estándar)
       const resultado: ValidacionUbicacionResult = await prestacionService.cerrarPrestacionConValidacion(
         prestacion.prestacion_id,
         ubicacion.latitude,
@@ -293,6 +350,37 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
     setConfirmSuggestOpen(true);
   };
 
+  const handleConfirmarCierreAnticipado = async () => {
+    if (!motivoCierreAnticipado.trim() || !ubicacionCierre || !prestacion) return;
+    try {
+      setLoadingCierreAnticipado(true);
+      const resultado = await prestacionService.cerrarPrestacionDomicilio(
+        prestacion.prestacion_id,
+        ubicacionCierre.latitude,
+        ubicacionCierre.longitude,
+        prestacion.tipo_prestacion,
+        notas,
+        true,
+        motivoCierreAnticipado.trim()
+      );
+      setCierreAnticipadoModalOpen(false);
+      if (resultado.exito) {
+        setSuccessTitle('Prestación cerrada anticipadamente');
+        setSuccessMessage('La prestación se cerró con cierre anticipado. El motivo quedó registrado.');
+        setSuccessModalOpen(true);
+      } else {
+        setValidationErrorMessage(resultado.mensaje);
+        setValidationErrorModalOpen(true);
+      }
+    } catch (error) {
+      setCierreAnticipadoModalOpen(false);
+      setErrorMessage('Error cerrando la prestación. Intentá nuevamente.');
+      setErrorModalOpen(true);
+    } finally {
+      setLoadingCierreAnticipado(false);
+    }
+  };
+
   return (
     <>
       <Dialog open={visible} onOpenChange={onClose}>
@@ -330,6 +418,7 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
                       </Button>
                     </View>
 
+                    {!esEnProceso && (
                     <View className="flex-row items-center gap-2">
                       <Button
                         variant="outline"
@@ -354,6 +443,7 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
                         </View>
                       </Button>
                     </View>
+                    )}
 
                     <View className="flex-row items-center gap-2">
                       <Phone size={14} color="#6b7280" />
@@ -403,12 +493,21 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
                     </Text>
                   </View>
 
-                  <View className="flex-row items-center gap-2 p-3 bg-green-50 rounded-lg border border-green-200">
-                    <CheckCircle2 size={16} color="#10b981" />
-                    <Text className="text-xs text-green-700 flex-1">
-                      Sistema listo para validar ubicación
-                    </Text>
-                  </View>
+                  {esDomicilio && esEnProceso && tiempoTranscurrido ? (
+                    <View className="flex-row items-center gap-2 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                      <Clock size={16} color="#3b82f6" />
+                      <Text className="text-xs text-blue-700 flex-1">
+                        Transcurrido: <Text className="font-semibold">{tiempoTranscurrido}</Text> / mín. {minDuracion} min
+                      </Text>
+                    </View>
+                  ) : (
+                    <View className="flex-row items-center gap-2 p-3 bg-green-50 rounded-lg border border-green-200">
+                      <CheckCircle2 size={16} color="#10b981" />
+                      <Text className="text-xs text-green-700 flex-1">
+                        Sistema listo para validar ubicación
+                      </Text>
+                    </View>
+                  )}
                 </View>
               </View>
             </ScrollView>
@@ -498,6 +597,7 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
               </AlertDialogAction>
             )}
 
+            {!esEnProceso && (
             <AlertDialogAction
               onPress={handleConfirmSuggest}
               disabled={suggestingLocation}
@@ -510,6 +610,7 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
                 </Text>
               </View>
             </AlertDialogAction>
+            )}
 
             <AlertDialogAction onPress={handleContactSupport}>
               <Text className="text-white font-medium">Contactar Soporte</Text>
@@ -563,6 +664,43 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
             >
               <Text>Confirmar</Text>
             </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Modal de Cierre Anticipado */}
+      <AlertDialog open={cierreAnticipadoModalOpen} onOpenChange={setCierreAnticipadoModalOpen}>
+        <AlertDialogContent className="max-w-sm mx-6">
+          <AlertDialogHeader>
+            <View style={styles.modalIconContainer}>
+              <Clock size={48} color="#f59e0b" />
+              <AlertDialogTitle style={styles.modalTitle}>Duración insuficiente</AlertDialogTitle>
+            </View>
+            <AlertDialogDescription style={styles.modalDescription}>
+              {`Llevás ${minutosActuales} minutos (mínimo requerido: ${minutosMinimos} min).\n\n¿Querés cerrar la prestación de todas formas? Debés indicar el motivo.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <View className="px-4 pb-2">
+            <Textarea
+              placeholder="Motivo del cierre anticipado (obligatorio)..."
+              value={motivoCierreAnticipado}
+              onChangeText={setMotivoCierreAnticipado}
+              className="min-h-20"
+            />
+          </View>
+          <AlertDialogFooter style={styles.modalFooterColumn}>
+            <AlertDialogAction
+              onPress={handleConfirmarCierreAnticipado}
+              disabled={!motivoCierreAnticipado.trim() || loadingCierreAnticipado}
+              style={{ backgroundColor: '#f59e0b' }}
+            >
+              <Text className="text-white font-medium">
+                {loadingCierreAnticipado ? 'Cerrando...' : 'Cerrar con motivo'}
+              </Text>
+            </AlertDialogAction>
+            <AlertDialogCancel onPress={() => setCierreAnticipadoModalOpen(false)}>
+              <Text>Cancelar</Text>
+            </AlertDialogCancel>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

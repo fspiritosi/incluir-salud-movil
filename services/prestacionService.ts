@@ -73,6 +73,7 @@ export interface PrestacionCompleta {
   centro_radio_metros?: number;
   centro_tiene_ubicacion_sugerida?: boolean;
   started_at?: string;
+  completed_at?: string;
   notas?: string;
   paciente_id: string;
 }
@@ -88,7 +89,8 @@ export interface SugerenciaOffline {
 
 export interface PrestacionOffline {
   prestacion_id: string;
-  accion?: 'cerrar' | 'transporte_iniciar' | 'transporte_finalizar';
+  prestacion_ids?: string[];
+  accion?: 'cerrar' | 'cerrar_domicilio' | 'iniciar_domicilio' | 'transporte_iniciar' | 'transporte_finalizar' | 'centro_validar';
   ubicacion_lat: number;
   ubicacion_lng: number;
   notas: string;
@@ -152,6 +154,17 @@ class PrestacionService {
       exito: false,
       mensaje: 'Respuesta inválida al sugerir ubicación',
     };
+
+    if (payload.exito) {
+      await this.guardarSugerenciaOffline({
+        tipo: 'paciente',
+        id: prestacionId,
+        ubicacion_lat: ubicacionLat,
+        ubicacion_lng: ubicacionLng,
+        precision_m: precisionM ?? null,
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     return payload;
   }
@@ -327,16 +340,9 @@ class PrestacionService {
         return null;
       }
 
-      // Verificar si el cache no está muy viejo (para modo online)
+      // El cache no expira: los datos mensuales permanecen hasta actualizarse desde el servidor.
       const cacheAge = Date.now() - parseInt(timestamp);
-      const isOnline = await connectivityService.isOnline();
-
-      if (isOnline && cacheAge > this.CACHE_DURATION) {
-        console.log('⏰ Cache expirado, necesita actualización');
-        return null;
-      }
-
-      console.log(`📦 Usando cache ${isOnline ? '(online - cache fresco)' : '(offline)'}`);
+      console.log(`📦 Usando cache local (última actualización hace ${Math.round(cacheAge / 60000)} min)`);
       return JSON.parse(cachedData);
     } catch (error) {
       console.error('Error leyendo cache:', error);
@@ -494,6 +500,7 @@ class PrestacionService {
       pendientes[idx] = p;
     } else {
       p.estado = 'completada';
+      p.completed_at = new Date().toISOString();
       if (typeof notas === 'string') {
         p.notas = notas;
       }
@@ -583,6 +590,62 @@ class PrestacionService {
     return { pendientes, completadas, isFromCache: false, isOffline: false };
   }
 
+  // Fusionar datos del servidor con cache local cuando hay acciones offline pendientes
+  // Esto evita que un pull-to-refresh pise prestaciones que el usuario ya inició/cerró offline
+  private async mergeConCacheSiAccionesPendientes(
+    dbPendientes: PrestacionCompleta[],
+    dbCompletadas: PrestacionCompleta[]
+  ): Promise<{ pendientes: PrestacionCompleta[]; completadas: PrestacionCompleta[] }> {
+    try {
+      const offlineData = await AsyncStorage.getItem(this.OFFLINE_KEY);
+      if (!offlineData) return { pendientes: dbPendientes, completadas: dbCompletadas };
+
+      const lista: PrestacionOffline[] = JSON.parse(offlineData);
+      const idsConAccionPendiente = new Set<string>();
+      for (const accion of lista) {
+        idsConAccionPendiente.add(accion.prestacion_id);
+        if (accion.prestacion_ids) {
+          for (const id of accion.prestacion_ids) idsConAccionPendiente.add(id);
+        }
+      }
+
+      if (idsConAccionPendiente.size === 0) {
+        return { pendientes: dbPendientes, completadas: dbCompletadas };
+      }
+
+      const cachedData = await this.obtenerDeCache();
+      if (!cachedData) return { pendientes: dbPendientes, completadas: dbCompletadas };
+
+      const findInCache = (id: string): PrestacionCompleta | undefined =>
+        cachedData.pendientes.find(p => p.prestacion_id === id) ||
+        cachedData.completadas.find(p => p.prestacion_id === id);
+
+      const merge = (list: PrestacionCompleta[]) =>
+        list.map(p => (idsConAccionPendiente.has(p.prestacion_id) ? findInCache(p.prestacion_id) || p : p));
+
+      const mergedPendientes = merge(dbPendientes);
+      const mergedCompletadas = merge(dbCompletadas);
+
+      // Agregar del cache las prestaciones con acción pendiente que no vengan del servidor
+      const dbIds = new Set([...dbPendientes, ...dbCompletadas].map(p => p.prestacion_id));
+      const allCache = [...cachedData.pendientes, ...cachedData.completadas];
+      for (const p of allCache) {
+        if (idsConAccionPendiente.has(p.prestacion_id) && !dbIds.has(p.prestacion_id)) {
+          if (p.estado === 'completada') {
+            mergedCompletadas.push(p);
+          } else {
+            mergedPendientes.push(p);
+          }
+        }
+      }
+
+      return { pendientes: mergedPendientes, completadas: mergedCompletadas };
+    } catch (error) {
+      console.error('Error mergeando cache con acciones offline:', error);
+      return { pendientes: dbPendientes, completadas: dbCompletadas };
+    }
+  }
+
   // Obtener prestaciones del día actual con sistema de cache inteligente
   async obtenerPrestacionesDelDia(userId?: string, forceRefresh: boolean = false): Promise<{
     pendientes: PrestacionCompleta[];
@@ -669,6 +732,7 @@ class PrestacionService {
           centro_radio_metros: typeof p.centro_radio_metros === 'number' ? p.centro_radio_metros : undefined,
           centro_tiene_ubicacion_sugerida: Boolean(p.centro_tiene_ubicacion_sugerida),
           started_at: p.started_at || undefined,
+          completed_at: p.completed_at || undefined,
           notas: p.notas || undefined,
           paciente_id: p.paciente_id
         };
@@ -677,7 +741,8 @@ class PrestacionService {
       const pendientes = prestacionesCompletas.filter(p => p.estado === 'pendiente' || p.estado === 'en_proceso');
       const completadas = prestacionesCompletas.filter(p => p.estado === 'completada');
 
-      const resultado = { pendientes, completadas };
+      // Fusionar con cache cuando haya acciones offline pendientes
+      const resultado = await this.mergeConCacheSiAccionesPendientes(pendientes, completadas);
 
       // Guardar en cache para uso offline
       await this.guardarEnCache(resultado);
@@ -686,14 +751,11 @@ class PrestacionService {
     } catch (error) {
       console.error('Error obteniendo prestaciones:', error);
 
-      // Si falla la conexión, intentar usar cache como fallback
-      const isOnlineNow = await connectivityService.isOnline();
-      if (!isOnlineNow) {
-        const cachedData = await this.obtenerDeCache();
-        if (cachedData) {
-          console.log('🔄 Usando cache como fallback después de error');
-          return { ...cachedData, isFromCache: true, isOffline: true };
-        }
+      // Si falla el request, intentar usar cache como fallback
+      const cachedData = await this.obtenerDeCache();
+      if (cachedData) {
+        console.log('🔄 Usando cache como fallback después de error');
+        return { ...cachedData, isFromCache: true, isOffline: true };
       }
 
       throw error;
@@ -867,6 +929,299 @@ class PrestacionService {
     }
   }
 
+  // Helpers para detectar tipo de prestación domiciliaria
+  esTipoAT(tipo: string): boolean {
+    const t = tipo.toLowerCase();
+    return t.includes('acompañante') || t.includes('acompanante');
+  }
+
+  esTipoKinesiologo(tipo: string): boolean {
+    const t = tipo.toLowerCase();
+    return t.includes('kinesiol') || t.includes('kine');
+  }
+
+  // Obtiene las ubicaciones de referencia para validar inicio/cierre domiciliario:
+  // domicilio del paciente (desde DB si hay conexión, sino cache) y sugerencia offline pendiente.
+  private async obtenerReferenciasDomicilio(
+    prestacionId: string,
+    prestacion: PrestacionCompleta | undefined
+  ): Promise<Array<{ lat: number; lng: number; descripcion: string }>> {
+    const referencias: Array<{ lat: number; lng: number; descripcion: string }> = [];
+
+    // 1. Sugerencia offline pendiente
+    const sugerencias = await this.obtenerSugerenciasOffline();
+    const sugerencia = sugerencias.find(s => s.tipo === 'paciente' && s.id === prestacionId);
+    if (sugerencia) {
+      referencias.push({
+        lat: sugerencia.ubicacion_lat,
+        lng: sugerencia.ubicacion_lng,
+        descripcion: 'ubicación sugerida'
+      });
+    }
+
+    // 2. Domicilio del paciente
+    if (prestacion) {
+      const isOnline = await connectivityService.isOnline();
+      let domicilioAgregado = false;
+
+      if (isOnline) {
+        try {
+          const fecha = new Date(prestacion.fecha);
+          const { pendientes, completadas } = await this.obtenerPrestacionesPorRango(fecha, fecha);
+          const p = [...pendientes, ...completadas].find(x => x.prestacion_id === prestacionId);
+          if (
+            p &&
+            typeof p.ubicacion_paciente_lat === 'number' &&
+            typeof p.ubicacion_paciente_lng === 'number' &&
+            p.ubicacion_paciente_lat !== 0 &&
+            p.ubicacion_paciente_lng !== 0
+          ) {
+            referencias.push({
+              lat: p.ubicacion_paciente_lat,
+              lng: p.ubicacion_paciente_lng,
+              descripcion: 'domicilio'
+            });
+            domicilioAgregado = true;
+          }
+        } catch (e) {
+          console.error('Error consultando domicilio fresco en DB:', e);
+        }
+      }
+
+      if (
+        !domicilioAgregado &&
+        typeof prestacion.ubicacion_paciente_lat === 'number' &&
+        typeof prestacion.ubicacion_paciente_lng === 'number' &&
+        prestacion.ubicacion_paciente_lat !== 0 &&
+        prestacion.ubicacion_paciente_lng !== 0
+      ) {
+        referencias.push({
+          lat: prestacion.ubicacion_paciente_lat,
+          lng: prestacion.ubicacion_paciente_lng,
+          descripcion: 'domicilio'
+        });
+      }
+    }
+
+    return referencias;
+  }
+
+  // Iniciar prestación domiciliaria (AT o Kine) con validación de ubicación
+  async iniciarPrestacionDomicilio(
+    prestacionId: string,
+    lat: number,
+    lng: number,
+    radioPermitido: number = 50
+  ): Promise<ValidacionUbicacion> {
+    try {
+      const cachedData = await this.obtenerDeCache();
+      const prestacion = cachedData?.pendientes.find(p => p.prestacion_id === prestacionId);
+
+      const referencias = await this.obtenerReferenciasDomicilio(prestacionId, prestacion);
+
+      if (referencias.length === 0) {
+        return {
+          exito: false,
+          mensaje: 'El paciente no tiene ubicación registrada. Sugerí una ubicación antes de iniciar.',
+          distancia_metros: 0
+        };
+      }
+
+      const resultados = referencias.map(r => ({
+        distancia: this.calcularDistancia(lat, lng, r.lat, r.lng),
+        descripcion: r.descripcion
+      }));
+
+      const masCercana = resultados.reduce((min, r) => r.distancia < min.distancia ? r : min);
+
+      if (masCercana.distancia > radioPermitido) {
+        const detalles = resultados
+          .map(r => `${Math.round(r.distancia)}m del ${r.descripcion}`)
+          .join(' y ');
+        return {
+          exito: false,
+          mensaje: `Estás a ${detalles}. Debés estar a menos de ${radioPermitido}m de alguna.`,
+          distancia_metros: masCercana.distancia
+        };
+      }
+
+      const distancia = masCercana.distancia;
+
+      const now = new Date().toISOString();
+      const isOnline = await connectivityService.isOnline();
+
+      if (!isOnline) {
+        // Modo offline: guardar inicio para sincronizar después
+        await this.guardarPrestacionOffline({
+          prestacion_id: prestacionId,
+          accion: 'iniciar_domicilio',
+          ubicacion_lat: lat,
+          ubicacion_lng: lng,
+          notas: '',
+          timestamp: now,
+          distancia_metros: distancia,
+        });
+        // Guardar coords de inicio en AsyncStorage (para validación de cierre en Kine)
+        await AsyncStorage.setItem(`inicio_coords_${prestacionId}`, JSON.stringify({ lat, lng, started_at: now }));
+        // Actualizar cache
+        await this.actualizarCacheTransporte(prestacionId, 'iniciar');
+        return { exito: true, mensaje: 'Prestación iniciada sin conexión. Se sincronizará automáticamente.', distancia_metros: distancia };
+      }
+
+      // Actualizar en DB
+      const { error } = await supabase
+        .from('prestaciones')
+        .update({ estado: 'en_proceso', started_at: now, updated_at: now })
+        .eq('id', prestacionId);
+
+      if (error) throw error;
+
+      // Guardar coords de inicio en AsyncStorage (para validación de cierre en Kine)
+      await AsyncStorage.setItem(`inicio_coords_${prestacionId}`, JSON.stringify({ lat, lng, started_at: now }));
+
+      // Actualizar cache
+      await this.actualizarCacheTransporte(prestacionId, 'iniciar');
+
+      return { exito: true, mensaje: 'Prestación iniciada correctamente.', distancia_metros: distancia };
+    } catch (error) {
+      console.error('Error iniciando prestación domicilio:', error);
+      return { exito: false, mensaje: 'No se pudo iniciar la prestación. Intentá nuevamente.', distancia_metros: 0 };
+    }
+  }
+
+  // Cerrar prestación domiciliaria (AT: solo duración; Kine: duración + ubicación)
+  async cerrarPrestacionDomicilio(
+    prestacionId: string,
+    lat: number,
+    lng: number,
+    tipoPrestacion: string,
+    notas?: string,
+    forzarCierre: boolean = false,
+    motivoCierreAnticipado?: string
+  ): Promise<ValidacionUbicacion> {
+    try {
+      const esKine = this.esTipoKinesiologo(tipoPrestacion);
+      const minDuracion = esKine ? 30 : 40;
+
+      // Obtener started_at desde cache o AsyncStorage
+      const cachedData = await this.obtenerDeCache();
+      const prestacion = cachedData?.pendientes.find(p => p.prestacion_id === prestacionId);
+      const inicioRaw = await AsyncStorage.getItem(`inicio_coords_${prestacionId}`);
+      const inicioDatos = inicioRaw ? JSON.parse(inicioRaw) : null;
+
+      const startedAt = prestacion?.started_at || inicioDatos?.started_at;
+
+      // Validar duración mínima (a menos que se fuerce el cierre)
+      if (startedAt && !forzarCierre) {
+        const mins = Math.floor((Date.now() - new Date(startedAt).getTime()) / 60000);
+        if (mins < minDuracion) {
+          return {
+            exito: false,
+            mensaje: `DURACION_INSUFICIENTE|${mins}|${minDuracion}`,
+            distancia_metros: 0
+          };
+        }
+      }
+
+      // Validar que el cierre esté cerca del domicilio o de la sugerencia (solo Kine)
+      if (esKine) {
+        const referenciasCierre = await this.obtenerReferenciasDomicilio(prestacionId, prestacion);
+        if (referenciasCierre.length > 0) {
+          const resultadosCierre = referenciasCierre.map(r => ({
+            distancia: this.calcularDistancia(lat, lng, r.lat, r.lng),
+            descripcion: r.descripcion
+          }));
+          const masCercanaCierre = resultadosCierre.reduce((min, r) => r.distancia < min.distancia ? r : min);
+
+          if (masCercanaCierre.distancia > 50) {
+            const detalles = resultadosCierre
+              .map(r => `${Math.round(r.distancia)}m del ${r.descripcion}`)
+              .join(' y ');
+            return {
+              exito: false,
+              mensaje: `Estás a ${detalles}. Debés cerrar a menos de 50m de alguna.`,
+              distancia_metros: masCercanaCierre.distancia
+            };
+          }
+        }
+      }
+
+      const now = new Date().toISOString();
+      const isOnline = await connectivityService.isOnline();
+
+      // Construir notas finales
+      let notasFinales = notas || '';
+      if (forzarCierre && motivoCierreAnticipado) {
+        const prefijo = '[CIERRE ANTICIPADO] ';
+        notasFinales = notasFinales
+          ? `${prefijo}${motivoCierreAnticipado} | ${notasFinales}`
+          : `${prefijo}${motivoCierreAnticipado}`;
+      }
+
+      if (!isOnline) {
+        // Guardar offline para sincronizar después
+        await this.guardarPrestacionOffline({
+          prestacion_id: prestacionId,
+          accion: 'cerrar_domicilio',
+          ubicacion_lat: lat,
+          ubicacion_lng: lng,
+          notas: notasFinales,
+          timestamp: now,
+          distancia_metros: 0,
+        });
+        // Limpiar coords de inicio
+        await AsyncStorage.removeItem(`inicio_coords_${prestacionId}`);
+        // Actualizar cache local
+        await this.actualizarCacheTransporte(prestacionId, 'finalizar', notasFinales || undefined);
+        return { exito: true, mensaje: 'Prestación guardada sin conexión. Se sincronizará automáticamente.', distancia_metros: 0 };
+      }
+
+      // Actualizar en DB (siempre guardar ubicación de cierre)
+      const { error } = await supabase
+        .from('prestaciones')
+        .update({
+          estado: 'completada',
+          completed_at: now,
+          updated_at: now,
+          ubicacion_cierre: `POINT(${lng} ${lat})`,
+          ...(notasFinales && { notas: notasFinales })
+        })
+        .eq('id', prestacionId);
+
+      if (error) throw error;
+
+      // Limpiar coords de inicio
+      await AsyncStorage.removeItem(`inicio_coords_${prestacionId}`);
+
+      // Actualizar cache
+      await this.actualizarCacheTransporte(prestacionId, 'finalizar', notasFinales || undefined);
+
+      return { exito: true, mensaje: 'Prestación completada correctamente.', distancia_metros: 0 };
+    } catch (error) {
+      console.error('Error cerrando prestación domicilio:', error);
+      return { exito: false, mensaje: 'No se pudo completar la prestación. Intentá nuevamente.', distancia_metros: 0 };
+    }
+  }
+
+  // Horas acumuladas del mes por paciente para el AT logueado
+  async obtenerHorasAcumuladasMes(): Promise<Record<string, number>> {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const currentUserId = user?.id;
+      if (!currentUserId) throw new Error('Usuario no autenticado');
+      const { data, error } = await supabase.rpc('obtener_horas_acumuladas_mes', { p_user_id: currentUserId });
+      if (error) throw error;
+      const resultado: Record<string, number> = {};
+      for (const row of (data || [])) {
+        resultado[row.paciente_id] = Math.round(Number(row.minutos));
+      }
+      return resultado;
+    } catch (error) {
+      console.error('Error obteniendo horas acumuladas:', error);
+      return {};
+    }
+  }
+
   // Resetear estado de prestación (solo para desarrollo)
   async resetearEstadoPrestacion(prestacionId: string): Promise<void> {
     try {
@@ -890,16 +1245,18 @@ class PrestacionService {
     }
   }
 
-  // Guardar sugerencia offline para sincronizar después
+  // Guardar sugerencia en storage local (siempre, para que esté disponible al iniciar)
   private async guardarSugerenciaOffline(sugerencia: SugerenciaOffline): Promise<void> {
     try {
       const raw = await AsyncStorage.getItem(this.SUGGESTIONS_OFFLINE_KEY);
       const lista: SugerenciaOffline[] = raw ? JSON.parse(raw) : [];
-      const existe = lista.find(s => s.tipo === sugerencia.tipo && s.id === sugerencia.id);
-      if (!existe) {
+      const index = lista.findIndex(s => s.tipo === sugerencia.tipo && s.id === sugerencia.id);
+      if (index >= 0) {
+        lista[index] = sugerencia;
+      } else {
         lista.push(sugerencia);
-        await AsyncStorage.setItem(this.SUGGESTIONS_OFFLINE_KEY, JSON.stringify(lista));
       }
+      await AsyncStorage.setItem(this.SUGGESTIONS_OFFLINE_KEY, JSON.stringify(lista));
     } catch (error) {
       console.error('Error guardando sugerencia offline:', error);
     }
@@ -1078,7 +1435,24 @@ class PrestacionService {
       for (const prestacion of lista) {
         try {
           let resultado: ValidacionUbicacion;
-          if (prestacion.accion === 'transporte_iniciar') {
+          if (prestacion.accion === 'iniciar_domicilio') {
+            const { data: updated, error: dbError } = await supabase
+              .from('prestaciones')
+              .update({
+                estado: 'en_proceso',
+                started_at: prestacion.timestamp,
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', prestacion.prestacion_id)
+              .select('id');
+
+            if (dbError) throw dbError;
+            if (!updated || updated.length === 0) {
+              throw new Error('No se pudo iniciar la prestación en el servidor (sin permisos o no existe)');
+            }
+
+            resultado = { exito: true, mensaje: '', distancia_metros: 0 };
+          } else if (prestacion.accion === 'transporte_iniciar') {
             resultado = await this.iniciarPrestacionTransporteConValidacion(
               prestacion.prestacion_id,
               prestacion.ubicacion_lat,
@@ -1091,6 +1465,37 @@ class PrestacionService {
               prestacion.ubicacion_lng,
               prestacion.notas
             );
+          } else if (prestacion.accion === 'centro_validar') {
+            const ids = prestacion.prestacion_ids || [prestacion.prestacion_id];
+            const res = await this.validarPrestacionesCentro(
+              ids,
+              prestacion.ubicacion_lat,
+              prestacion.ubicacion_lng
+            );
+            resultado = {
+              exito: res.exito,
+              mensaje: res.mensaje,
+              distancia_metros: res.distancia_metros ?? 0,
+            };
+          } else if (prestacion.accion === 'cerrar_domicilio') {
+            const { data: updated, error: dbError } = await supabase
+              .from('prestaciones')
+              .update({
+                estado: 'completada',
+                completed_at: prestacion.timestamp,
+                updated_at: new Date().toISOString(),
+                ubicacion_cierre: `POINT(${prestacion.ubicacion_lng} ${prestacion.ubicacion_lat})`,
+                ...(prestacion.notas && { notas: prestacion.notas })
+              })
+              .eq('id', prestacion.prestacion_id)
+              .select('id');
+
+            if (dbError) throw dbError;
+            if (!updated || updated.length === 0) {
+              throw new Error('No se pudo cerrar la prestación en el servidor (sin permisos o no existe)');
+            }
+
+            resultado = { exito: true, mensaje: '', distancia_metros: 0 };
           } else {
             resultado = await this.cerrarPrestacionConValidacion(
               prestacion.prestacion_id,
@@ -1325,6 +1730,7 @@ class PrestacionService {
           centro_radio_metros: typeof p.centro_radio_metros === 'number' ? p.centro_radio_metros : undefined,
           centro_tiene_ubicacion_sugerida: Boolean(p.centro_tiene_ubicacion_sugerida),
           started_at: p.started_at || undefined,
+          completed_at: p.completed_at || undefined,
           notas: p.notas || undefined,
           paciente_id: p.paciente_id
         };
@@ -1333,6 +1739,9 @@ class PrestacionService {
       const pendientes = prestacionesCompletas.filter(p => p.estado === 'pendiente' || p.estado === 'en_proceso');
       const completadas = prestacionesCompletas.filter(p => p.estado === 'completada');
 
+      // Fusionar con cache cuando haya acciones offline pendientes
+      const resultado = await this.mergeConCacheSiAccionesPendientes(pendientes, completadas);
+
       // Si el rango incluye el día actual, actualizar cache
       const hoy = moment.tz(this.TIMEZONE).startOf('day');
       const inicioRango = moment(fechaInicio).startOf('day');
@@ -1340,21 +1749,35 @@ class PrestacionService {
 
       if (hoy.isBetween(inicioRango, finRango, null, '[]')) {
         // Filtrar solo las prestaciones del día actual para el cache
-        const prestacionesHoy = prestacionesCompletas.filter(p => {
+        const prestacionesHoy = [...resultado.pendientes, ...resultado.completadas].filter(p => {
           const fechaPrestacion = moment(p.fecha).tz(this.TIMEZONE).startOf('day');
           return fechaPrestacion.isSame(hoy, 'day');
         });
 
-        const pendientesHoy = prestacionesHoy.filter(p => p.estado === 'pendiente');
+        const pendientesHoy = prestacionesHoy.filter(p => p.estado === 'pendiente' || p.estado === 'en_proceso');
         const completadasHoy = prestacionesHoy.filter(p => p.estado === 'completada');
 
         await this.guardarEnCache({ pendientes: pendientesHoy, completadas: completadasHoy });
         console.log('💾 Cache del día actual actualizado durante consulta de rango');
       }
 
-      return { pendientes, completadas, isFromCache: false, isOffline: false };
+      return { ...resultado, isFromCache: false, isOffline: false };
     } catch (error) {
       console.error('Error obteniendo prestaciones por rango:', error);
+
+      // Si falla el request, intentar usar cache como fallback si el rango incluye hoy
+      const hoyFallback = moment.tz(this.TIMEZONE).startOf('day');
+      const inicioFallback = moment(fechaInicio).startOf('day');
+      const finFallback = moment(fechaFin).endOf('day');
+
+      if (hoyFallback.isBetween(inicioFallback, finFallback, null, '[]')) {
+        const cachedData = await this.obtenerDeCache();
+        if (cachedData) {
+          console.log('🔄 Usando cache como fallback después de error en rango');
+          return { ...cachedData, isFromCache: true, isOffline: true };
+        }
+      }
+
       throw error;
     }
   }
@@ -1388,6 +1811,33 @@ class PrestacionService {
     error?: string;
   }> {
     try {
+      const isOnline = await connectivityService.isOnline();
+
+      if (!isOnline) {
+        // Fallback offline: usar datos cacheados de obtenerPrestacionesDelDia
+        const cached = await this.obtenerDeCache();
+        if (cached) {
+          const prestacionesCentro = cached.pendientes
+            .filter(p => p.centro_id === centroId && p.tipo_prestacion !== 'Transporte')
+            .map(p => {
+              const partes = (p.paciente_nombre || '').split(' ');
+              const nombre = partes[0] || '';
+              const apellido = partes.slice(1).join(' ') || '';
+              return {
+                prestacion_id: p.prestacion_id,
+                paciente_id: p.paciente_id,
+                paciente_nombre: nombre,
+                paciente_apellido: apellido,
+                fecha: p.fecha,
+                estado: p.estado,
+                tipo_prestacion: p.tipo_prestacion,
+              };
+            });
+          return { prestaciones: prestacionesCentro };
+        }
+        return { prestaciones: [], error: 'Sin conexión y sin datos en cache' };
+      }
+
       const { data, error } = await supabase.rpc('obtener_prestaciones_pendientes_centro', {
         p_centro_id: centroId
       });
@@ -1421,9 +1871,24 @@ class PrestacionService {
       const isOnline = await connectivityService.isOnline();
 
       if (!isOnline) {
+        const timestamp = new Date().toISOString();
+        await this.guardarPrestacionOffline({
+          prestacion_id: prestacionIds[0],
+          prestacion_ids: prestacionIds,
+          accion: 'centro_validar',
+          ubicacion_lat: ubicacionLat,
+          ubicacion_lng: ubicacionLng,
+          notas: '',
+          timestamp,
+          distancia_metros: 0,
+        });
+        for (const id of prestacionIds) {
+          await this.actualizarCacheTransporte(id, 'finalizar');
+        }
         return {
-          exito: false,
-          mensaje: 'La validación grupal requiere conexión a internet'
+          exito: true,
+          mensaje: `${prestacionIds.length} prestación(es) guardada(s) sin conexión. Se sincronizarán automáticamente cuando haya internet.`,
+          prestaciones_validadas: prestacionIds.length,
         };
       }
 

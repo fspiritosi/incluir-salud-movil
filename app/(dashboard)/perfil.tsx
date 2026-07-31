@@ -6,6 +6,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { router } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import { Session } from '@supabase/supabase-js';
+import { useSessionGuard } from '../../hooks/useSessionGuard';
 import { Text } from '../../components/ui/text';
 import { Card, CardContent, CardHeader } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
@@ -33,7 +34,7 @@ const AVATAR_WIDTH = 600;
 
 export default function PerfilPage() {
     const insets = useSafeAreaInsets();
-    const [session, setSession] = useState<Session | null>(null);
+    const { session } = useSessionGuard(() => router.replace('/'));
     const [loading, setLoading] = useState(false);
     const [firstName, setFirstName] = useState('');
     const [lastName, setLastName] = useState('');
@@ -72,26 +73,8 @@ export default function PerfilPage() {
     const [updatingPassword, setUpdatingPassword] = useState(false);
 
     useEffect(() => {
-        supabase.auth.getSession().then(({ data: { session } }) => {
-            setSession(session);
-            if (!session) {
-                router.replace('/');
-            } else {
-                loadProfile(session);
-            }
-        });
-
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-            setSession(session);
-            if (!session) {
-                router.replace('/');
-            } else if (session) {
-                loadProfile(session);
-            }
-        });
-
-        return () => subscription.unsubscribe();
-    }, []);
+        if (session) loadProfile(session);
+    }, [session?.user?.id]);
 
     const onRefresh = async () => {
         if (!session) return;
@@ -100,7 +83,6 @@ export default function PerfilPage() {
             // Recargar sesión para obtener metadata actualizada
             const { data: { session: newSession } } = await supabase.auth.refreshSession();
             if (newSession) {
-                setSession(newSession);
                 await loadProfile(newSession);
             }
         } catch (error) {
