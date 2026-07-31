@@ -25,6 +25,7 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Text } from '@/components/ui/text';
 import { supabase } from '../../lib/supabase';
+import { useSessionGuard } from '../../hooks/useSessionGuard';
 import { useConnectivity } from '../../services/connectivityService';
 import { choferService } from '../../services/choferService';
 import { reporteService, type ReporteData, type PacienteReporte } from '@/services/reporteService';
@@ -52,26 +53,9 @@ const TIMEZONE =
 
 export default function ReportesPage() {
     const insets = useSafeAreaInsets();
-    const [session, setSession] = useState<Session | null>(null);
+    const { session } = useSessionGuard(() => router.replace('/'));
     const [isChoferUser, setIsChoferUser] = useState(false);
 
-    useEffect(() => {
-        supabase.auth.getSession().then(({ data: { session } }) => {
-            setSession(session);
-            if (!session) {
-                router.replace('/');
-            }
-        });
-
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-            setSession(session);
-            if (!session) {
-                router.replace('/');
-            }
-        });
-
-        return () => subscription.unsubscribe();
-    }, []);
 
     useEffect(() => {
         if (session) {
@@ -276,6 +260,14 @@ export default function ReportesPage() {
         return `$ ${valor}`;
     };
 
+    const formatearDuracion = (minutos: number | null | undefined) => {
+        if (minutos === null || minutos === undefined || minutos <= 0) return 'N/A';
+        const h = Math.floor(minutos / 60);
+        const m = Math.round(minutos % 60);
+        if (h > 0) return `${h}h ${m}m`;
+        return `${m}m`;
+    };
+
     const getFilterLabel = () => {
         switch (dateFilter) {
             case 'today':
@@ -316,6 +308,7 @@ export default function ReportesPage() {
                     <td style="padding: 8px; border: 1px solid #ddd;">${p.paciente ? `${p.paciente.apellido}, ${p.paciente.nombre}` : 'N/A'}</td>
                     <td style="padding: 8px; border: 1px solid #ddd;">${p.paciente?.documento || 'N/A'}</td>
                     <td style="padding: 8px; border: 1px solid #ddd;">${p.estado.toUpperCase()}</td>
+                    <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatearDuracion(p.minutos)}</td>
                     <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatearMonto(p.monto)}</td>
                 </tr>
             `).join('');
@@ -367,6 +360,7 @@ export default function ReportesPage() {
                                     <th>Paciente</th>
                                     <th>DNI Paciente</th>
                                     <th>Estado</th>
+                                    <th>Duración</th>
                                     <th>Monto</th>
                                 </tr>
                             </thead>
@@ -378,6 +372,7 @@ export default function ReportesPage() {
                     <div class="totales">
                         <div class="totales-row"><strong>Total de Prestaciones:</strong> ${totales.cantidad}</div>
                         <div class="totales-row"><strong>Monto Total:</strong> ${formatearMonto(totales.monto)}</div>
+                        <div class="totales-row"><strong>Total de Horas:</strong> ${formatearDuracion(totales.minutos)}</div>
                     </div>
                     <div class="footer">
                         Generado el ${moment().tz(TIMEZONE).format('DD/MM/YYYY HH:mm')} por ${prestador.apellido}, ${prestador.nombre}
@@ -434,6 +429,26 @@ export default function ReportesPage() {
             </View>
 
             <View className="p-6 pt-4 gap-4">
+                {/* Reporte de Residencia */}
+                <Card>
+                    <CardHeader>
+                        <CardTitle>
+                            <Text>
+                                Reporte de Residencia
+                            </Text>
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <Button
+                            variant="outline"
+                            className="w-full"
+                            onPress={() => router.push('/(dashboard)/reporte-residencia')}
+                        >
+                            <Text>Generar reporte de residencia</Text>
+                        </Button>
+                    </CardContent>
+                </Card>
+
                 {/* Filtros */}
                 <Card>
                     <CardHeader>
@@ -700,6 +715,14 @@ export default function ReportesPage() {
                                         </Text>
                                     ) : null}
                                 </View>
+                                <View className="flex-row justify-between">
+                                    <Text variant="small" className="font-semibold">
+                                        Total de Horas:
+                                    </Text>
+                                    <Text variant="large" className="font-bold text-blue-600">
+                                        {formatearDuracion(reporteData.totales.minutos)}
+                                    </Text>
+                                </View>
                             </CardContent>
                         </Card>
 
@@ -812,6 +835,9 @@ export default function ReportesPage() {
                                             </Text>
                                             <Text variant="small" className="text-muted-foreground">
                                                 • Monto total: {formatearMonto(reporteData.totales.monto)}
+                                            </Text>
+                                            <Text variant="small" className="text-muted-foreground">
+                                                • Total de horas: {formatearDuracion(reporteData.totales.minutos)}
                                             </Text>
                                             <Text variant="small" className="text-muted-foreground">
                                                 • Período: {formatearFecha(fechaInicio)} - {formatearFecha(fechaFin)}
@@ -941,6 +967,14 @@ export default function ReportesPage() {
                                                 className="font-bold text-green-600"
                                             >
                                                 {formatearMonto(prestacion.monto)}
+                                            </Text>
+                                        </View>
+                                        <View className="flex-row justify-between items-center mt-2">
+                                            <Text variant="small" className="text-muted-foreground">
+                                                Duración:
+                                            </Text>
+                                            <Text variant="small" className="font-medium">
+                                                {formatearDuracion(prestacion.minutos)}
                                             </Text>
                                         </View>
                                     </View>

@@ -4,7 +4,10 @@ import {
   ArrowLeft,
   Building2,
   CheckCircle,
+  Clock,
+  DoorOpen,
   Loader2,
+  LogOut,
   MapPin,
   Users,
   AlertCircle,
@@ -31,6 +34,7 @@ import {
 import { useLocation } from '../../hooks/useLocation';
 import { useConnectivity } from '../../services/connectivityService';
 import { prestacionService, PrestacionCompleta } from '../../services/prestacionService';
+import { jornadaService, JornadaResidencia } from '../../services/jornadaService';
 
 type PrestacionCentro = {
   prestacion_id: string;
@@ -58,6 +62,12 @@ export default function ValidarCentroPage() {
   const [validating, setValidating] = useState(false);
   const [suggestingCenterLocation, setSuggestingCenterLocation] = useState(false);
   const [selectedDay, setSelectedDay] = useState<string>('');
+
+  const [jornadaActiva, setJornadaActiva] = useState<JornadaResidencia | null>(null);
+  const [iniciandoJornada, setIniciandoJornada] = useState(false);
+  const [finalizandoJornada, setFinalizandoJornada] = useState(false);
+  const [horasJornadaMes, setHorasJornadaMes] = useState(0);
+  const [transcurrido, setTranscurrido] = useState('');
 
   const [successModalOpen, setSuccessModalOpen] = useState(false);
   const [successModalContext, setSuccessModalContext] = useState<'validacion' | 'sugerencia'>('validacion');
@@ -97,6 +107,18 @@ export default function ValidarCentroPage() {
     const dayPrestaciones = prestacionesByDay[day] || [];
     setSelectedIds(new Set(dayPrestaciones.filter(p => !(p as any).paciente_completo_hoy).map(p => p.prestacion_id)));
   };
+
+  const loadJornada = useCallback(async () => {
+    if (!centroId) return;
+    try {
+      const jornada = await jornadaService.obtenerJornadaActivaHoy(String(centroId));
+      setJornadaActiva(jornada);
+      const mins = await jornadaService.obtenerHorasJornadasMes(String(centroId));
+      setHorasJornadaMes(mins);
+    } catch (e) {
+      console.log('Error cargando jornada:', e);
+    }
+  }, [centroId]);
 
   const loadPrestaciones = useCallback(async () => {
     if (!centroId) return;
@@ -138,23 +160,156 @@ export default function ValidarCentroPage() {
 
   useEffect(() => {
     loadPrestaciones();
-  }, [loadPrestaciones]);
+    loadJornada();
+  }, [loadPrestaciones, loadJornada]);
+
+  useEffect(() => {
+    if (!jornadaActiva) { setTranscurrido(''); return; }
+    const actualizar = () => setTranscurrido(jornadaService.calcularTranscurrido(jornadaActiva.entrada_at));
+    actualizar();
+    const interval = setInterval(actualizar, 30000);
+    return () => clearInterval(interval);
+  }, [jornadaActiva]);
 
   // Refrescar automáticamente al volver a enfocar la pantalla
   useFocusEffect(
     useCallback(() => {
       setRefreshing(true);
       (async () => {
-        await loadPrestaciones();
+        await Promise.all([
+          jornadaService.sincronizarJornadasOffline().catch(() => {}),
+          prestacionService.sincronizarPrestacionesOffline().catch(() => {})
+        ]);
+        await Promise.all([loadPrestaciones(), loadJornada()]);
         setRefreshing(false);
       })();
-    }, [loadPrestaciones])
+    }, [loadPrestaciones, loadJornada])
   );
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadPrestaciones();
+    await Promise.all([
+      jornadaService.sincronizarJornadasOffline().catch(() => {}),
+      prestacionService.sincronizarPrestacionesOffline().catch(() => {})
+    ]);
+    await Promise.all([loadPrestaciones(), loadJornada()]);
     setRefreshing(false);
+  };
+
+  const handleIniciarJornada = async () => {
+    try {
+      setIniciandoJornada(true);
+      const ubicacion = await requestLocation();
+      if (!ubicacion) {
+        setErrorMessage('No se pudo obtener tu ubicación. Verificá GPS y permisos.');
+        setErrorDetail(null);
+        setErrorModalOpen(true);
+        return;
+      }
+      const resultado = await jornadaService.iniciarJornada(
+        String(centroId),
+        ubicacion.latitude,
+        ubicacion.longitude
+      );
+      if (resultado.exito) {
+        setJornadaActiva(resultado.jornada!);
+        if (!resultado.offline) {
+          setSuccessModalContext('validacion');
+          setSuccessMessage(resultado.mensaje);
+          setSuccessModalOpen(true);
+        }
+      } else {
+        setErrorMessage(resultado.mensaje);
+        setErrorDetail(null);
+        setErrorModalOpen(true);
+      }
+    } catch (e: any) {
+      setErrorMessage(e?.message || 'Error al iniciar jornada');
+      setErrorDetail(null);
+      setErrorModalOpen(true);
+    } finally {
+      setIniciandoJornada(false);
+    }
+  };
+
+  const validarSeleccionadas = async (): Promise<{ exito: boolean; mensaje: string; detalle?: any }> => {
+    if (selectedIds.size === 0) {
+      return { exito: false, mensaje: 'Seleccioná al menos una prestación para validar' };
+    }
+
+    const selectedPrestaciones = prestaciones.filter(p => selectedIds.has(p.prestacion_id));
+    const bloqueadas = selectedPrestaciones.filter(p => (p as any).paciente_completo_hoy);
+
+    if (bloqueadas.length > 0) {
+      const detalle = bloqueadas
+        .map(p => `• ${p.paciente_apellido}, ${p.paciente_nombre}`)
+        .join('\n');
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        bloqueadas.forEach(p => next.delete(p.prestacion_id));
+        return next;
+      });
+      return {
+        exito: false,
+        mensaje: 'Hay pacientes que ya alcanzaron su límite diario. Quítalos de la selección para continuar.',
+        detalle
+      };
+    }
+
+    const ubicacion = await requestLocation();
+    if (!ubicacion) {
+      return { exito: false, mensaje: 'No se pudo obtener tu ubicación. Verificá GPS y permisos.' };
+    }
+
+    console.log('📍 Ubicación del usuario:', {
+      latitude: ubicacion.latitude,
+      longitude: ubicacion.longitude,
+      accuracy: ubicacion.accuracy
+    });
+
+    const result = await prestacionService.validarPrestacionesCentro(
+      Array.from(selectedIds),
+      ubicacion.latitude,
+      ubicacion.longitude
+    );
+
+    return result;
+  };
+
+  const handleFinalizarJornada = async () => {
+    if (!jornadaActiva) return;
+    setFinalizandoJornada(true);
+    try {
+      if (selectedIds.size > 0) {
+        const result = await validarSeleccionadas();
+        if (!result.exito) {
+          setErrorMessage(result.mensaje);
+          setErrorDetail(result.detalle ? JSON.stringify(result.detalle, null, 2) : null);
+          setErrorModalOpen(true);
+          return;
+        }
+      }
+
+      const resultado = await jornadaService.finalizarJornada(jornadaActiva.id, jornadaActiva.entrada_at);
+      if (resultado.exito) {
+        setJornadaActiva(null);
+        const mins = await jornadaService.obtenerHorasJornadasMes(String(centroId));
+        setHorasJornadaMes(mins);
+        setSuccessModalContext('validacion');
+        setSuccessMessage(resultado.mensaje);
+        setSuccessModalOpen(true);
+      } else {
+        setErrorMessage(resultado.mensaje);
+        setErrorDetail(null);
+        setErrorModalOpen(true);
+      }
+    } catch (e: any) {
+      setErrorMessage(e?.message || 'Error al finalizar jornada');
+      setErrorDetail(null);
+      setErrorModalOpen(true);
+    } finally {
+      setFinalizandoJornada(false);
+    }
   };
 
   const handleSugerirUbicacionCentro = async () => {
@@ -250,12 +405,6 @@ export default function ValidarCentroPage() {
       return;
     }
 
-    if (!connectivity.isConnected) {
-      setErrorMessage('La validación grupal requiere conexión a internet');
-      setErrorModalOpen(true);
-      return;
-    }
-
     try {
       setValidating(true);
 
@@ -280,6 +429,20 @@ export default function ValidarCentroPage() {
       );
 
       if (result.exito) {
+        // Al validar también se cierra la jornada
+        if (jornadaActiva) {
+          const resultado = await jornadaService.finalizarJornada(jornadaActiva.id, jornadaActiva.entrada_at);
+          if (resultado.exito) {
+            setJornadaActiva(null);
+            const mins = await jornadaService.obtenerHorasJornadasMes(String(centroId));
+            setHorasJornadaMes(mins);
+          } else {
+            setErrorMessage(resultado.mensaje);
+            setErrorDetail(null);
+            setErrorModalOpen(true);
+            return;
+          }
+        }
         setSuccessModalContext('validacion');
         setSuccessMessage(result.mensaje);
         setSuccessModalOpen(true);
@@ -331,12 +494,66 @@ export default function ValidarCentroPage() {
         <Building2 size={24} className="text-muted-foreground" />
       </View>
 
+      {/* Banner de jornada */}
+      {jornadaActiva ? (
+        <View className="bg-blue-100 px-4 py-3 flex-row items-center justify-between gap-2 border-b border-blue-200">
+          <View className="flex-row items-center gap-2 flex-1">
+            <Clock size={16} color="#2563eb" />
+            <View>
+              <Text className="text-blue-800 text-sm font-semibold">Jornada en curso: {transcurrido}</Text>
+              {horasJornadaMes > 0 && (
+                <Text className="text-blue-600 text-xs">Este mes: {jornadaService.formatearDuracion(horasJornadaMes)}</Text>
+              )}
+            </View>
+          </View>
+          <Button
+            size="sm"
+            variant="outline"
+            className="border-blue-400"
+            onPress={handleFinalizarJornada}
+            disabled={finalizandoJornada}
+          >
+            <View className="flex-row items-center gap-1">
+              {finalizandoJornada ? <Loader2 size={14} color="#2563eb" /> : <LogOut size={14} color="#2563eb" />}
+              <Text className="text-blue-700 text-xs font-medium">
+                {finalizandoJornada ? 'Finalizando...' : 'Finalizar'}
+              </Text>
+            </View>
+          </Button>
+        </View>
+      ) : (
+        <View className="bg-amber-50 px-4 py-3 flex-row items-center justify-between gap-2 border-b border-amber-200">
+          <View className="flex-row items-center gap-2 flex-1">
+            <DoorOpen size={16} color="#d97706" />
+            <View>
+              <Text className="text-amber-800 text-sm font-semibold">Sin jornada iniciada</Text>
+              {horasJornadaMes > 0 && (
+                <Text className="text-amber-600 text-xs">Este mes: {jornadaService.formatearDuracion(horasJornadaMes)}</Text>
+              )}
+            </View>
+          </View>
+          <Button
+            size="sm"
+            className="bg-green-600"
+            onPress={handleIniciarJornada}
+            disabled={iniciandoJornada}
+          >
+            <View className="flex-row items-center gap-1">
+              {iniciandoJornada ? <Loader2 size={14} color="#fff" /> : <DoorOpen size={14} color="#fff" />}
+              <Text className="text-white text-xs font-medium">
+                {iniciandoJornada ? 'Iniciando...' : 'Iniciar jornada'}
+              </Text>
+            </View>
+          </Button>
+        </View>
+      )}
+
       {/* Offline warning */}
       {!connectivity.isConnected && (
         <View className="bg-amber-100 px-4 py-2 flex-row items-center gap-2">
           <AlertCircle size={16} className="text-amber-600" />
           <Text className="text-amber-800 text-sm flex-1">
-            Sin conexión. La validación grupal requiere internet.
+            Sin conexión. Las acciones se guardarán y sincronizarán al reconectarte.
           </Text>
         </View>
       )}
@@ -474,8 +691,8 @@ export default function ValidarCentroPage() {
             <View className="mt-6 mb-4">
               <Button
                 onPress={handleValidar}
-                disabled={validating || selectedIds.size === 0 || !connectivity.isConnected}
-                className="w-full bg-green-600 active:bg-green-700"
+                disabled={validating || selectedIds.size === 0 || !jornadaActiva}
+                className={`w-full active:bg-green-700 ${jornadaActiva ? 'bg-green-600' : 'bg-green-300'}`}
                 size="lg"
               >
                 {validating ? (
