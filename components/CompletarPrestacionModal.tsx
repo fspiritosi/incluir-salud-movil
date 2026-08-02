@@ -600,7 +600,7 @@ export default function CompletarPrestacionModal({ visible, prestacion, onClose,
             {!esEnProceso && (
             <AlertDialogAction
               onPress={handleConfirmSuggest}
-              disabled={suggestingLocation}
+              disabled={suggestingLocation || Boolean(prestacion.paciente_tiene_ubicacion_sugerida)}
               style={styles.directionsButton}
             >
               <View style={styles.directionsButtonContent}>
