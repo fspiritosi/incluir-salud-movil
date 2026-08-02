@@ -72,6 +72,14 @@ export interface PrestacionCompleta {
   centro_lng?: number;
   centro_radio_metros?: number;
   centro_tiene_ubicacion_sugerida?: boolean;
+  paciente_domicilio_lat?: number;
+  paciente_domicilio_lng?: number;
+  paciente_sugerida_lat?: number;
+  paciente_sugerida_lng?: number;
+  centro_domicilio_lat?: number;
+  centro_domicilio_lng?: number;
+  centro_sugerida_lat?: number;
+  centro_sugerida_lng?: number;
   started_at?: string;
   completed_at?: string;
   notas?: string;
@@ -127,10 +135,19 @@ class PrestacionService {
   ): Promise<{ exito: boolean; mensaje: string; offline?: boolean }> {
     const isOnline = await connectivityService.isOnline();
 
+    // Determinar si la prestación es en centro para guardar la sugerencia correctamente
+    const cachedData = await this.obtenerDeCache();
+    const prestacion = cachedData
+      ? [...cachedData.pendientes, ...cachedData.completadas].find(p => p.prestacion_id === prestacionId)
+      : undefined;
+    const esCentro = prestacion?.centro_id && prestacion.tipo_prestacion !== 'Transporte';
+    const sugerenciaTipo: 'paciente' | 'centro' = esCentro ? 'centro' : 'paciente';
+    const sugerenciaId = esCentro ? prestacion.centro_id! : prestacionId;
+
     if (!isOnline) {
       await this.guardarSugerenciaOffline({
-        tipo: 'paciente',
-        id: prestacionId,
+        tipo: sugerenciaTipo,
+        id: sugerenciaId,
         ubicacion_lat: ubicacionLat,
         ubicacion_lng: ubicacionLng,
         precision_m: precisionM ?? null,
@@ -157,8 +174,8 @@ class PrestacionService {
 
     if (payload.exito) {
       await this.guardarSugerenciaOffline({
-        tipo: 'paciente',
-        id: prestacionId,
+        tipo: sugerenciaTipo,
+        id: sugerenciaId,
         ubicacion_lat: ubicacionLat,
         ubicacion_lng: ubicacionLng,
         precision_m: precisionM ?? null,
@@ -578,6 +595,14 @@ class PrestacionService {
         centro_lng: typeof p.centro_lng === 'number' ? p.centro_lng : undefined,
         centro_radio_metros: typeof p.centro_radio_metros === 'number' ? p.centro_radio_metros : undefined,
         centro_tiene_ubicacion_sugerida: Boolean(p.centro_tiene_ubicacion_sugerida),
+        paciente_domicilio_lat: typeof p.paciente_domicilio_lat === 'number' ? p.paciente_domicilio_lat : undefined,
+        paciente_domicilio_lng: typeof p.paciente_domicilio_lng === 'number' ? p.paciente_domicilio_lng : undefined,
+        paciente_sugerida_lat: typeof p.paciente_sugerida_lat === 'number' ? p.paciente_sugerida_lat : undefined,
+        paciente_sugerida_lng: typeof p.paciente_sugerida_lng === 'number' ? p.paciente_sugerida_lng : undefined,
+        centro_domicilio_lat: typeof p.centro_domicilio_lat === 'number' ? p.centro_domicilio_lat : undefined,
+        centro_domicilio_lng: typeof p.centro_domicilio_lng === 'number' ? p.centro_domicilio_lng : undefined,
+        centro_sugerida_lat: typeof p.centro_sugerida_lat === 'number' ? p.centro_sugerida_lat : undefined,
+        centro_sugerida_lng: typeof p.centro_sugerida_lng === 'number' ? p.centro_sugerida_lng : undefined,
         started_at: p.started_at || undefined,
         notas: p.notas || undefined,
         paciente_id: p.paciente_id,
@@ -731,6 +756,14 @@ class PrestacionService {
           centro_lng: typeof p.centro_lng === 'number' ? p.centro_lng : undefined,
           centro_radio_metros: typeof p.centro_radio_metros === 'number' ? p.centro_radio_metros : undefined,
           centro_tiene_ubicacion_sugerida: Boolean(p.centro_tiene_ubicacion_sugerida),
+          paciente_domicilio_lat: typeof p.paciente_domicilio_lat === 'number' ? p.paciente_domicilio_lat : undefined,
+          paciente_domicilio_lng: typeof p.paciente_domicilio_lng === 'number' ? p.paciente_domicilio_lng : undefined,
+          paciente_sugerida_lat: typeof p.paciente_sugerida_lat === 'number' ? p.paciente_sugerida_lat : undefined,
+          paciente_sugerida_lng: typeof p.paciente_sugerida_lng === 'number' ? p.paciente_sugerida_lng : undefined,
+          centro_domicilio_lat: typeof p.centro_domicilio_lat === 'number' ? p.centro_domicilio_lat : undefined,
+          centro_domicilio_lng: typeof p.centro_domicilio_lng === 'number' ? p.centro_domicilio_lng : undefined,
+          centro_sugerida_lat: typeof p.centro_sugerida_lat === 'number' ? p.centro_sugerida_lat : undefined,
+          centro_sugerida_lng: typeof p.centro_sugerida_lng === 'number' ? p.centro_sugerida_lng : undefined,
           started_at: p.started_at || undefined,
           completed_at: p.completed_at || undefined,
           notas: p.notas || undefined,
@@ -762,7 +795,7 @@ class PrestacionService {
     }
   }
 
-  // Validar ubicación offline usando datos en cache
+  // Validar ubicación offline usando datos en cache (valida contra domicilio + sugerida)
   private async validarUbicacionOffline(
     prestacionId: string,
     ubicacionLat: number,
@@ -770,70 +803,46 @@ class PrestacionService {
     radioPermitido: number = 50
   ): Promise<ValidacionUbicacion> {
     try {
-      // Obtener datos de cache para encontrar la prestación
       const cachedData = await this.obtenerDeCache();
       if (!cachedData) {
         throw new Error('No hay datos en cache para validar ubicación offline');
       }
 
-      // Buscar la prestación en pendientes
-      const prestacion = cachedData.pendientes.find(p => p.prestacion_id === prestacionId);
+      const prestacion = [...cachedData.pendientes, ...cachedData.completadas].find(p => p.prestacion_id === prestacionId);
       if (!prestacion) {
         throw new Error('Prestación no encontrada en cache');
       }
 
       const esAT = this.esTipoAT(prestacion.tipo_prestacion);
+      const radioEfectivo = (prestacion.centro_id && prestacion.centro_radio_metros) || radioPermitido;
 
-      let targetLat: number;
-      let targetLng: number;
-      let radioEfectivo = radioPermitido;
-      let ubicacionDescripcion = 'paciente';
+      const referencias = await this.obtenerReferenciasDomicilio(prestacionId, prestacion);
 
-      // Si la prestación tiene centro asignado con ubicación, validar contra el centro
-      if (prestacion.centro_id && 
-          typeof prestacion.centro_lat === 'number' && 
-          typeof prestacion.centro_lng === 'number') {
-        targetLat = prestacion.centro_lat;
-        targetLng = prestacion.centro_lng;
-        radioEfectivo = prestacion.centro_radio_metros || radioPermitido;
-        ubicacionDescripcion = prestacion.centro_nombre || 'centro';
-      } else {
-        // Validar contra la ubicación del paciente
-        targetLat = prestacion.ubicacion_paciente_lat;
-        targetLng = prestacion.ubicacion_paciente_lng;
-
-        // Si no hay ubicación en cache, buscar en sugerencias offline pendientes
-        if (typeof targetLat !== 'number' || typeof targetLng !== 'number') {
-          const sugerencias = await this.obtenerSugerenciasOffline();
-          const sugerencia = sugerencias.find(s => s.tipo === 'paciente' && s.id === prestacionId);
-          if (sugerencia) {
-            targetLat = sugerencia.ubicacion_lat;
-            targetLng = sugerencia.ubicacion_lng;
-            ubicacionDescripcion = 'paciente (ubicación sugerida pendiente)';
-          } else if (!esAT) {
-            throw new Error('El paciente no tiene ubicación registrada ni sugerida');
-          }
+      if (referencias.length === 0) {
+        if (esAT) {
+          return {
+            exito: true,
+            mensaje: 'Prestación completada offline - se sincronizará automáticamente',
+            distancia_metros: 0,
+            prestacion_actualizada: { id: prestacionId, estado: 'completada', fecha_cierre: new Date().toISOString() }
+          };
         }
+        throw new Error('El paciente no tiene ubicación registrada ni sugerida');
       }
 
-      // Calcular distancia
-      const distancia = (esAT && (typeof targetLat !== 'number' || typeof targetLng !== 'number'))
-        ? 0
-        : this.calcularDistancia(
-            ubicacionLat,
-            ubicacionLng,
-            targetLat,
-            targetLng
-          );
-
-      const dentroDelRango = esAT || distancia <= radioEfectivo;
+      const resultados = referencias.map(r => ({
+        distancia: this.calcularDistancia(ubicacionLat, ubicacionLng, r.lat, r.lng),
+        descripcion: r.descripcion
+      }));
+      const masCercana = resultados.reduce((min, r) => r.distancia < min.distancia ? r : min);
+      const dentroDelRango = esAT || masCercana.distancia <= radioEfectivo;
 
       return {
         exito: dentroDelRango,
         mensaje: dentroDelRango
           ? 'Prestación completada offline - se sincronizará automáticamente'
-          : `Estás muy lejos del ${ubicacionDescripcion}. Distancia actual: ${Math.round(distancia)}m (máximo permitido: ${radioEfectivo}m)`,
-        distancia_metros: distancia,
+          : `Estás muy lejos del ${masCercana.descripcion}. Distancia actual: ${Math.round(masCercana.distancia)}m (máximo permitido: ${radioEfectivo}m)`,
+        distancia_metros: masCercana.distancia,
         prestacion_actualizada: dentroDelRango ? {
           id: prestacionId,
           estado: 'completada',
@@ -945,64 +954,76 @@ class PrestacionService {
   }
 
   // Obtiene las ubicaciones de referencia para validar inicio/cierre domiciliario:
-  // domicilio del paciente (desde DB si hay conexión, sino cache) y sugerencia offline pendiente.
+  // Usa campos separados domicilio y sugerida (paciente o centro) + sugerencias offline pendientes.
   private async obtenerReferenciasDomicilio(
     prestacionId: string,
     prestacion: PrestacionCompleta | undefined
   ): Promise<Array<{ lat: number; lng: number; descripcion: string }>> {
     const referencias: Array<{ lat: number; lng: number; descripcion: string }> = [];
 
-    // 1. Sugerencia offline pendiente
-    const sugerencias = await this.obtenerSugerenciasOffline();
-    const sugerencia = sugerencias.find(s => s.tipo === 'paciente' && s.id === prestacionId);
-    if (sugerencia) {
-      referencias.push({
-        lat: sugerencia.ubicacion_lat,
-        lng: sugerencia.ubicacion_lng,
-        descripcion: 'ubicación sugerida'
-      });
-    }
+    if (!prestacion) return referencias;
 
-    // 2. Domicilio del paciente
-    if (prestacion) {
-      const isOnline = await connectivityService.isOnline();
-      let domicilioAgregado = false;
+    // Determinar si es prestación en centro
+    const esCentro = prestacion.centro_id &&
+      (typeof prestacion.centro_domicilio_lat === 'number' || typeof prestacion.centro_sugerida_lat === 'number' ||
+       typeof prestacion.centro_lat === 'number');
 
-      if (isOnline) {
-        try {
-          const fecha = new Date(prestacion.fecha);
-          const { pendientes, completadas } = await this.obtenerPrestacionesPorRango(fecha, fecha);
-          const p = [...pendientes, ...completadas].find(x => x.prestacion_id === prestacionId);
-          if (
-            p &&
-            typeof p.ubicacion_paciente_lat === 'number' &&
-            typeof p.ubicacion_paciente_lng === 'number' &&
-            p.ubicacion_paciente_lat !== 0 &&
-            p.ubicacion_paciente_lng !== 0
-          ) {
-            referencias.push({
-              lat: p.ubicacion_paciente_lat,
-              lng: p.ubicacion_paciente_lng,
-              descripcion: 'domicilio'
-            });
-            domicilioAgregado = true;
-          }
-        } catch (e) {
-          console.error('Error consultando domicilio fresco en DB:', e);
-        }
+    if (esCentro) {
+      // 1. Ubicación oficial del centro
+      if (typeof prestacion.centro_domicilio_lat === 'number' && typeof prestacion.centro_domicilio_lng === 'number') {
+        referencias.push({
+          lat: prestacion.centro_domicilio_lat,
+          lng: prestacion.centro_domicilio_lng,
+          descripcion: 'centro'
+        });
       }
 
-      if (
-        !domicilioAgregado &&
-        typeof prestacion.ubicacion_paciente_lat === 'number' &&
-        typeof prestacion.ubicacion_paciente_lng === 'number' &&
-        prestacion.ubicacion_paciente_lat !== 0 &&
-        prestacion.ubicacion_paciente_lng !== 0
-      ) {
+      // 2. Ubicación sugerida del centro
+      if (typeof prestacion.centro_sugerida_lat === 'number' && typeof prestacion.centro_sugerida_lng === 'number') {
         referencias.push({
-          lat: prestacion.ubicacion_paciente_lat,
-          lng: prestacion.ubicacion_paciente_lng,
+          lat: prestacion.centro_sugerida_lat,
+          lng: prestacion.centro_sugerida_lng,
+          descripcion: 'centro (sugerida)'
+        });
+      }
+
+      // 3. Sugerencia offline pendiente para el centro
+      const sugerencias = await this.obtenerSugerenciasOffline();
+      const sugerencia = sugerencias.find(s => s.tipo === 'centro' && s.id === prestacion.centro_id);
+      if (sugerencia) {
+        referencias.push({
+          lat: sugerencia.ubicacion_lat,
+          lng: sugerencia.ubicacion_lng,
+          descripcion: 'centro (sugerencia pendiente)'
+        });
+      }
+    } else {
+      // 1. Domicilio del paciente
+      if (typeof prestacion.paciente_domicilio_lat === 'number' && typeof prestacion.paciente_domicilio_lng === 'number') {
+        referencias.push({
+          lat: prestacion.paciente_domicilio_lat,
+          lng: prestacion.paciente_domicilio_lng,
           descripcion: 'domicilio'
+        });
+      }
+
+      // 2. Ubicación sugerida del paciente
+      if (typeof prestacion.paciente_sugerida_lat === 'number' && typeof prestacion.paciente_sugerida_lng === 'number') {
+        referencias.push({
+          lat: prestacion.paciente_sugerida_lat,
+          lng: prestacion.paciente_sugerida_lng,
+          descripcion: 'ubicación sugerida'
+        });
+      }
+
+      // 3. Sugerencia offline pendiente para el paciente
+      const sugerencias = await this.obtenerSugerenciasOffline();
+      const sugerencia = sugerencias.find(s => s.tipo === 'paciente' && s.id === prestacionId);
+      if (sugerencia) {
+        referencias.push({
+          lat: sugerencia.ubicacion_lat,
+          lng: sugerencia.ubicacion_lng,
+          descripcion: 'sugerencia pendiente'
         });
       }
     }
@@ -1733,6 +1754,14 @@ class PrestacionService {
           centro_lng: typeof p.centro_lng === 'number' ? p.centro_lng : undefined,
           centro_radio_metros: typeof p.centro_radio_metros === 'number' ? p.centro_radio_metros : undefined,
           centro_tiene_ubicacion_sugerida: Boolean(p.centro_tiene_ubicacion_sugerida),
+          paciente_domicilio_lat: typeof p.paciente_domicilio_lat === 'number' ? p.paciente_domicilio_lat : undefined,
+          paciente_domicilio_lng: typeof p.paciente_domicilio_lng === 'number' ? p.paciente_domicilio_lng : undefined,
+          paciente_sugerida_lat: typeof p.paciente_sugerida_lat === 'number' ? p.paciente_sugerida_lat : undefined,
+          paciente_sugerida_lng: typeof p.paciente_sugerida_lng === 'number' ? p.paciente_sugerida_lng : undefined,
+          centro_domicilio_lat: typeof p.centro_domicilio_lat === 'number' ? p.centro_domicilio_lat : undefined,
+          centro_domicilio_lng: typeof p.centro_domicilio_lng === 'number' ? p.centro_domicilio_lng : undefined,
+          centro_sugerida_lat: typeof p.centro_sugerida_lat === 'number' ? p.centro_sugerida_lat : undefined,
+          centro_sugerida_lng: typeof p.centro_sugerida_lng === 'number' ? p.centro_sugerida_lng : undefined,
           started_at: p.started_at || undefined,
           completed_at: p.completed_at || undefined,
           notas: p.notas || undefined,
