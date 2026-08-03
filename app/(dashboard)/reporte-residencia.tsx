@@ -29,7 +29,7 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import moment from 'moment-timezone';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
     ActivityIndicator,
     Platform,
@@ -58,6 +58,7 @@ export default function ReporteResidenciaPage() {
     const [centroId, setCentroId] = useState<string>('');
     const [isLoading, setIsLoading] = useState(false);
     const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+    const generatingPDFRef = useRef(false);
     const [reporte, setReporte] = useState<ResidenciaReporteData | null>(null);
 
     const [alertOpen, setAlertOpen] = useState(false);
@@ -147,6 +148,8 @@ export default function ReporteResidenciaPage() {
         }
 
         try {
+            if (generatingPDFRef.current) return;
+            generatingPDFRef.current = true;
             setIsGeneratingPDF(true);
 
             const filasPacientes = reporte.pacientes.map(p => `
@@ -249,6 +252,7 @@ export default function ReporteResidenciaPage() {
             const msg = error instanceof Error ? error.message : String(error);
             showAlert('Error', `No se pudo generar el PDF: ${msg}`);
         } finally {
+            generatingPDFRef.current = false;
             setIsGeneratingPDF(false);
         }
     };
