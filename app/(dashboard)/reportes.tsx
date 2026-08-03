@@ -35,7 +35,7 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import { FileDown } from 'lucide-react-native';
 import moment from 'moment-timezone';
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import {
     ActivityIndicator,
     Platform,
@@ -92,6 +92,7 @@ export default function ReportesPage() {
     const [pacientes, setPacientes] = useState<PacienteReporte[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+    const generatingPDFRef = useRef(false);
     const [reporteData, setReporteData] = useState<ReporteData | null>(null);
     const [reporteMesAnterior, setReporteMesAnterior] = useState<ReporteData | null>(null);
     const [vistaPreviaAbierta, setVistaPreviaAbierta] = useState(false);
@@ -291,6 +292,8 @@ export default function ReportesPage() {
         }
 
         try {
+            if (generatingPDFRef.current) return;
+            generatingPDFRef.current = true;
             setIsGeneratingPDF(true);
             const { prestador, prestaciones, totales } = reporteData;
 
@@ -406,6 +409,7 @@ export default function ReportesPage() {
             const msg = error instanceof Error ? error.message : String(error);
             showAlert('Error', `No se pudo generar el PDF: ${msg}`);
         } finally {
+            generatingPDFRef.current = false;
             setIsGeneratingPDF(false);
         }
     };
