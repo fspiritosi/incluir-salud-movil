@@ -376,6 +376,65 @@ class PrestacionService {
     }
   }
 
+  // Guarda en cache las prestaciones de un rango, fusionando con lo ya cacheado de otros días.
+  // Las prestaciones cacheadas dentro del rango se reemplazan por los datos frescos;
+  // las de otros días se conservan (poda entradas de más de 35 días).
+  private async guardarEnCacheRango(
+    data: { pendientes: PrestacionCompleta[]; completadas: PrestacionCompleta[] },
+    inicioISO: string,
+    finISO: string
+  ): Promise<void> {
+    try {
+      const inicio = moment(inicioISO);
+      const fin = moment(finISO);
+      const limiteAntiguedad = moment().subtract(35, 'days');
+
+      const cachePrevio = await this.obtenerDeCache();
+      const fueraDelRango = (p: PrestacionCompleta) => {
+        const fecha = moment(p.fecha);
+        return (fecha.isBefore(inicio) || fecha.isAfter(fin)) && fecha.isAfter(limiteAntiguedad);
+      };
+
+      const idsNuevos = new Set(
+        [...data.pendientes, ...data.completadas].map(p => p.prestacion_id)
+      );
+
+      const pendientesPrevias = (cachePrevio?.pendientes || []).filter(
+        p => fueraDelRango(p) && !idsNuevos.has(p.prestacion_id)
+      );
+      const completadasPrevias = (cachePrevio?.completadas || []).filter(
+        p => fueraDelRango(p) && !idsNuevos.has(p.prestacion_id)
+      );
+
+      await this.guardarEnCache({
+        pendientes: [...data.pendientes, ...pendientesPrevias],
+        completadas: [...data.completadas, ...completadasPrevias],
+      });
+    } catch (error) {
+      console.error('Error guardando cache por rango:', error);
+      // Fallback: guardar al menos los datos frescos
+      await this.guardarEnCache(data);
+    }
+  }
+
+  // Filtra los datos cacheados a un rango de fechas (para lecturas offline)
+  private filtrarCachePorRango(
+    cachedData: { pendientes: PrestacionCompleta[]; completadas: PrestacionCompleta[] },
+    inicioISO: string,
+    finISO: string
+  ): { pendientes: PrestacionCompleta[]; completadas: PrestacionCompleta[] } {
+    const inicio = moment(inicioISO);
+    const fin = moment(finISO);
+    const dentroDelRango = (p: PrestacionCompleta) => {
+      const fecha = moment(p.fecha);
+      return !fecha.isBefore(inicio) && !fecha.isAfter(fin);
+    };
+    return {
+      pendientes: cachedData.pendientes.filter(dentroDelRango),
+      completadas: cachedData.completadas.filter(dentroDelRango),
+    };
+  }
+
   // Verificar si el usuario ya completó una prestación hoy para este paciente
   async verificarLimiteCompletadasHoy(userId?: string, pacienteId?: string): Promise<{
     yaCompletoHoy: boolean;
@@ -681,12 +740,15 @@ class PrestacionService {
     try {
       const isOnline = await connectivityService.isOnline();
 
-      // Si no hay internet, usar cache
+      // Si no hay internet, usar cache (solo las prestaciones del día actual)
       if (!isOnline) {
         console.log('📡 Sin conexión - usando cache offline');
         const cachedData = await this.obtenerDeCache();
         if (cachedData) {
-          return { ...cachedData, isFromCache: true, isOffline: true };
+          const inicioHoy = moment.tz(this.TIMEZONE).startOf('day').utc().toISOString();
+          const finHoy = moment.tz(this.TIMEZONE).endOf('day').utc().toISOString();
+          const soloHoy = this.filtrarCachePorRango(cachedData, inicioHoy, finHoy);
+          return { ...soloHoy, isFromCache: true, isOffline: true };
         } else {
           throw new Error('Sin conexión y sin datos en cache');
         }
@@ -777,18 +839,21 @@ class PrestacionService {
       // Fusionar con cache cuando haya acciones offline pendientes
       const resultado = await this.mergeConCacheSiAccionesPendientes(pendientes, completadas);
 
-      // Guardar en cache para uso offline
-      await this.guardarEnCache(resultado);
+      // Guardar en cache para uso offline (fusiona con otros días ya cacheados)
+      await this.guardarEnCacheRango(resultado, inicioDelDiaUTC, finDelDiaUTC);
 
       return { ...resultado, isFromCache: false, isOffline: false };
     } catch (error) {
       console.error('Error obteniendo prestaciones:', error);
 
-      // Si falla el request, intentar usar cache como fallback
+      // Si falla el request, intentar usar cache como fallback (solo el día actual)
       const cachedData = await this.obtenerDeCache();
       if (cachedData) {
         console.log('🔄 Usando cache como fallback después de error');
-        return { ...cachedData, isFromCache: true, isOffline: true };
+        const inicioHoy = moment.tz(this.TIMEZONE).startOf('day').utc().toISOString();
+        const finHoy = moment.tz(this.TIMEZONE).endOf('day').utc().toISOString();
+        const soloHoy = this.filtrarCachePorRango(cachedData, inicioHoy, finHoy);
+        return { ...soloHoy, isFromCache: true, isOffline: true };
       }
 
       throw error;
@@ -1677,21 +1742,23 @@ class PrestacionService {
     isFromCache: boolean;
     isOffline: boolean;
   }> {
+    // Convertir fechas de Argentina a UTC para la consulta y cache
+    const inicioArgentina = moment(fechaInicio).tz(this.TIMEZONE).startOf('day');
+    const finArgentina = moment(fechaFin).tz(this.TIMEZONE).endOf('day');
+    const inicioUTC = inicioArgentina.clone().utc().toISOString();
+    const finUTC = finArgentina.clone().utc().toISOString();
+
     try {
       const isOnline = await connectivityService.isOnline();
 
-      // Si no hay internet, intentar usar cache solo si el rango incluye el día actual
+      // Si no hay internet, intentar usar cache filtrado al rango solicitado
       if (!isOnline) {
-        const hoy = moment.tz(this.TIMEZONE).startOf('day');
-        const inicioRango = moment(fechaInicio).startOf('day');
-        const finRango = moment(fechaFin).endOf('day');
-
-        // Si el rango incluye hoy, devolver cache del día actual
-        if (hoy.isBetween(inicioRango, finRango, null, '[]')) {
-          console.log('📡 Sin conexión - usando cache del día actual para rango que incluye hoy');
-          const cachedData = await this.obtenerDeCache();
-          if (cachedData) {
-            return { ...cachedData, isFromCache: true, isOffline: true };
+        const cachedData = await this.obtenerDeCache();
+        if (cachedData) {
+          console.log('📡 Sin conexión - usando cache filtrado al rango solicitado');
+          const cacheRango = this.filtrarCachePorRango(cachedData, inicioUTC, finUTC);
+          if (cacheRango.pendientes.length > 0 || cacheRango.completadas.length > 0) {
+            return { ...cacheRango, isFromCache: true, isOffline: true };
           }
         }
 
@@ -1705,13 +1772,6 @@ class PrestacionService {
       if (!currentUserId) {
         throw new Error('Usuario no autenticado');
       }
-
-      // Convertir fechas de Argentina a UTC para la consulta
-      const inicioArgentina = moment(fechaInicio).tz(this.TIMEZONE).startOf('day');
-      const finArgentina = moment(fechaFin).tz(this.TIMEZONE).endOf('day');
-
-      const inicioUTC = inicioArgentina.clone().utc().toISOString();
-      const finUTC = finArgentina.clone().utc().toISOString();
 
       console.log(`📅 Consultando prestaciones por rango:
         - Argentina: ${inicioArgentina.format('YYYY-MM-DD HH:mm:ss')} a ${finArgentina.format('YYYY-MM-DD HH:mm:ss')}
@@ -1775,39 +1835,21 @@ class PrestacionService {
       // Fusionar con cache cuando haya acciones offline pendientes
       const resultado = await this.mergeConCacheSiAccionesPendientes(pendientes, completadas);
 
-      // Si el rango incluye el día actual, actualizar cache
-      const hoy = moment.tz(this.TIMEZONE).startOf('day');
-      const inicioRango = moment(fechaInicio).startOf('day');
-      const finRango = moment(fechaFin).endOf('day');
-
-      if (hoy.isBetween(inicioRango, finRango, null, '[]')) {
-        // Filtrar solo las prestaciones del día actual para el cache
-        const prestacionesHoy = [...resultado.pendientes, ...resultado.completadas].filter(p => {
-          const fechaPrestacion = moment(p.fecha).tz(this.TIMEZONE).startOf('day');
-          return fechaPrestacion.isSame(hoy, 'day');
-        });
-
-        const pendientesHoy = prestacionesHoy.filter(p => p.estado === 'pendiente' || p.estado === 'en_proceso');
-        const completadasHoy = prestacionesHoy.filter(p => p.estado === 'completada');
-
-        await this.guardarEnCache({ pendientes: pendientesHoy, completadas: completadasHoy });
-        console.log('💾 Cache del día actual actualizado durante consulta de rango');
-      }
+      // Guardar en cache el rango consultado (fusionando con otros días cacheados)
+      await this.guardarEnCacheRango(resultado, inicioUTC, finUTC);
+      console.log('💾 Cache del rango actualizado durante consulta de rango');
 
       return { ...resultado, isFromCache: false, isOffline: false };
     } catch (error) {
       console.error('Error obteniendo prestaciones por rango:', error);
 
-      // Si falla el request, intentar usar cache como fallback si el rango incluye hoy
-      const hoyFallback = moment.tz(this.TIMEZONE).startOf('day');
-      const inicioFallback = moment(fechaInicio).startOf('day');
-      const finFallback = moment(fechaFin).endOf('day');
-
-      if (hoyFallback.isBetween(inicioFallback, finFallback, null, '[]')) {
-        const cachedData = await this.obtenerDeCache();
-        if (cachedData) {
-          console.log('🔄 Usando cache como fallback después de error en rango');
-          return { ...cachedData, isFromCache: true, isOffline: true };
+      // Si falla el request, intentar usar cache como fallback filtrado al rango
+      const cachedData = await this.obtenerDeCache();
+      if (cachedData) {
+        console.log('🔄 Usando cache como fallback después de error en rango');
+        const cacheRango = this.filtrarCachePorRango(cachedData, inicioUTC, finUTC);
+        if (cacheRango.pendientes.length > 0 || cacheRango.completadas.length > 0) {
+          return { ...cacheRango, isFromCache: true, isOffline: true };
         }
       }
 
