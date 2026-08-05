@@ -4,6 +4,7 @@ import 'moment/locale/es'; // Importar locale en español
 import { supabase } from '../lib/supabase';
 import { connectivityService } from './connectivityService';
 import { deviceService } from './deviceService';
+import { jornadaService } from './jornadaService';
 
 // Tipos base de la base de datos
 export interface PrestacionDB {
@@ -1137,6 +1138,18 @@ class PrestacionService {
 
       const distancia = masCercana.distancia;
 
+      // Si es una prestación de centro/residencia, verificar que no haya una jornada activa
+      if (prestacion?.centro_id) {
+        const jornadaActiva = await jornadaService.obtenerJornadaActivaHoy(prestacion.centro_id);
+        if (jornadaActiva) {
+          return {
+            exito: false,
+            mensaje: `La prestación de ${prestacion.paciente_nombre} ya se inició en jornada. Completala desde Validar en Centro.`,
+            distancia_metros: 0
+          };
+        }
+      }
+
       const now = new Date().toISOString();
       const isOnline = await connectivityService.isOnline();
 
@@ -1882,6 +1895,7 @@ class PrestacionService {
       fecha: string;
       estado: string;
       tipo_prestacion: string;
+      started_at?: string | null;
     }>;
     error?: string;
   }> {
@@ -1906,6 +1920,7 @@ class PrestacionService {
                 fecha: p.fecha,
                 estado: p.estado,
                 tipo_prestacion: p.tipo_prestacion,
+                started_at: p.started_at || null,
               };
             });
           return { prestaciones: prestacionesCentro };
@@ -1922,7 +1937,28 @@ class PrestacionService {
         return { prestaciones: [], error: error.message };
       }
 
-      return { prestaciones: data || [] };
+      const startedAtMap = new Map<string, string | null>();
+      if (data && data.length > 0) {
+        const ids = (data || []).map((p: any) => p.prestacion_id);
+        const { data: startedData, error: startedError } = await (supabase as any)
+          .from('prestaciones')
+          .select('id, started_at')
+          .in('id', ids);
+        if (startedError) {
+          console.error('Error obteniendo started_at:', startedError);
+        } else {
+          (startedData || []).forEach((row: any) => {
+            startedAtMap.set(row.id, row.started_at || null);
+          });
+        }
+      }
+
+      const prestacionesConStartedAt = (data || []).map((p: any) => ({
+        ...p,
+        started_at: startedAtMap.get(p.prestacion_id) || p.started_at || null,
+      }));
+
+      return { prestaciones: prestacionesConStartedAt };
     } catch (error: any) {
       console.error('Error obteniendo prestaciones del centro:', error);
       return { prestaciones: [], error: error?.message || 'Error desconocido' };
