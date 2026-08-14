@@ -44,6 +44,7 @@ type PrestacionCentro = {
   fecha: string;
   estado: string;
   tipo_prestacion: string;
+  started_at?: string | null;
   paciente_completo_hoy?: boolean;
 };
 
@@ -105,7 +106,7 @@ export default function ValidarCentroPage() {
   const handleDayChange = (day: string) => {
     setSelectedDay(day);
     const dayPrestaciones = prestacionesByDay[day] || [];
-    setSelectedIds(new Set(dayPrestaciones.filter(p => !(p as any).paciente_completo_hoy).map(p => p.prestacion_id)));
+    setSelectedIds(new Set(dayPrestaciones.filter(p => !(p as any).paciente_completo_hoy && !p.started_at).map(p => p.prestacion_id)));
   };
 
   const loadJornada = useCallback(async () => {
@@ -148,7 +149,7 @@ export default function ValidarCentroPage() {
       const defaultDay = days.includes(today) ? today : (days[0] || '');
       setSelectedDay(defaultDay);
       const defaultPrestaciones = groups[defaultDay] || [];
-      setSelectedIds(new Set(defaultPrestaciones.filter(p => !(p as any).paciente_completo_hoy).map(p => p.prestacion_id)));
+      setSelectedIds(new Set(defaultPrestaciones.filter(p => !(p as any).paciente_completo_hoy && !p.started_at).map(p => p.prestacion_id)));
     } catch (e: any) {
       setErrorMessage(e?.message || 'Error al cargar prestaciones');
       setErrorDetail(null);
@@ -237,8 +238,12 @@ export default function ValidarCentroPage() {
       return { exito: false, mensaje: 'Seleccioná al menos una prestación para validar' };
     }
 
-    const selectedPrestaciones = prestaciones.filter(p => selectedIds.has(p.prestacion_id));
+    const selectedPrestaciones = prestaciones.filter(p => selectedIds.has(p.prestacion_id) && !p.started_at);
     const bloqueadas = selectedPrestaciones.filter(p => (p as any).paciente_completo_hoy);
+
+    if (selectedPrestaciones.length === 0) {
+      return { exito: false, mensaje: 'No hay prestaciones seleccionables para validar en jornada' };
+    }
 
     if (bloqueadas.length > 0) {
       const detalle = bloqueadas
@@ -268,7 +273,7 @@ export default function ValidarCentroPage() {
     });
 
     const result = await prestacionService.validarPrestacionesCentro(
-      Array.from(selectedIds),
+      selectedPrestaciones.map(p => p.prestacion_id),
       ubicacion.latitude,
       ubicacion.longitude
     );
@@ -371,7 +376,7 @@ export default function ValidarCentroPage() {
   };
 
   const selectAll = () => {
-    setSelectedIds(new Set(prestacionesDelDia.map(p => p.prestacion_id)));
+    setSelectedIds(new Set(prestacionesDelDia.filter(p => !(p as any).paciente_completo_hoy && !p.started_at).map(p => p.prestacion_id)));
   };
 
   const selectNone = () => {
@@ -386,8 +391,15 @@ export default function ValidarCentroPage() {
       return;
     }
 
-    const selectedPrestaciones = prestaciones.filter(p => selectedIds.has(p.prestacion_id));
+    const selectedPrestaciones = prestaciones.filter(p => selectedIds.has(p.prestacion_id) && !p.started_at);
     const bloqueadas = selectedPrestaciones.filter(p => (p as any).paciente_completo_hoy);
+
+    if (selectedPrestaciones.length === 0) {
+      setErrorMessage('No hay prestaciones seleccionables para validar en jornada');
+      setErrorDetail('Las prestaciones seleccionadas fueron iniciadas individualmente o no están disponibles.');
+      setErrorModalOpen(true);
+      return;
+    }
 
     if (bloqueadas.length > 0) {
       setErrorMessage('Hay pacientes que ya alcanzaron su límite diario. Quítalos de la selección para continuar.');
@@ -423,7 +435,7 @@ export default function ValidarCentroPage() {
       });
 
       const result = await prestacionService.validarPrestacionesCentro(
-        Array.from(selectedIds),
+        selectedPrestaciones.map(p => p.prestacion_id),
         ubicacion.latitude,
         ubicacion.longitude
       );
@@ -639,7 +651,7 @@ export default function ValidarCentroPage() {
                   variant="outline"
                   size="sm"
                   onPress={() => {
-                    setSelectedIds(new Set(prestacionesDelDia.filter(p => !(p as any).paciente_completo_hoy).map(p => p.prestacion_id)));
+                    setSelectedIds(new Set(prestacionesDelDia.filter(p => !(p as any).paciente_completo_hoy && !p.started_at).map(p => p.prestacion_id)));
                   }}
                 >
                   <Text className="text-sm">Disponibles</Text>
@@ -651,17 +663,19 @@ export default function ValidarCentroPage() {
             <View className="gap-2">
               {prestacionesDelDia.map((p) => {
                 const disabledByLimit = Boolean((p as any).paciente_completo_hoy);
+                const iniciadaIndividual = Boolean(p.started_at);
+                const isDisabled = disabledByLimit || iniciadaIndividual;
                 const isSelected = selectedIds.has(p.prestacion_id);
                 return (
                 <Card
                   key={p.prestacion_id}
-                  className={`${isSelected ? 'border-primary bg-primary/5' : ''} ${disabledByLimit ? 'opacity-70' : ''}`}
+                  className={`${isSelected ? 'border-primary bg-primary/5' : ''} ${isDisabled ? 'opacity-70' : ''}`}
                 >
                   <CardContent className="py-3">
                     <View className="flex-row items-center gap-3">
                       <Checkbox
                         checked={isSelected}
-                        disabled={disabledByLimit}
+                        disabled={isDisabled}
                         onCheckedChange={() => toggleSelection(p.prestacion_id)}
                       />
                       <View className="flex-1">
@@ -671,6 +685,12 @@ export default function ValidarCentroPage() {
                         <Text className="text-sm text-muted-foreground">
                           {p.tipo_prestacion}
                         </Text>
+                        {iniciadaIndividual && (
+                          <View className="flex-row items-center gap-1 mt-1">
+                            <AlertCircle size={12} className="text-blue-600" />
+                            <Text className="text-xs text-blue-700">Iniciada individualmente. No se valida en jornada.</Text>
+                          </View>
+                        )}
                         {disabledByLimit && (
                           <View className="flex-row items-center gap-1 mt-1">
                             <AlertCircle size={12} className="text-amber-600" />
