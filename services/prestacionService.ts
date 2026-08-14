@@ -927,7 +927,8 @@ class PrestacionService {
     ubicacionLat: number,
     ubicacionLng: number,
     notas?: string,
-    pacienteId?: string
+    pacienteId?: string,
+    timestampCierreReal?: string
   ): Promise<ValidacionUbicacion> {
     try {
       const isOnline = await connectivityService.isOnline();
@@ -993,7 +994,8 @@ class PrestacionService {
         ubicacion_profesional: `POINT(${ubicacionLng} ${ubicacionLat})`,
         notas_cierre: notas || null,
         p_device_id: deviceId,
-        radio_permitido: 50
+        radio_permitido: 50,
+        p_timestamp_cierre_real: timestampCierreReal || null
       });
 
       if (error) {
@@ -1251,6 +1253,23 @@ class PrestacionService {
 
       const now = new Date().toISOString();
       const isOnline = await connectivityService.isOnline();
+
+      // VALIDACIÓN: Verificar límite de 1 prestación por día POR PACIENTE (igual que cerrarPrestacionConValidacion)
+      if (isOnline && prestacion?.paciente_id) {
+        const limiteCheck = await this.verificarLimiteCompletadasHoy(undefined, prestacion.paciente_id);
+        if (limiteCheck.yaCompletoHoy) {
+          const detalle = limiteCheck.detallePrestacion;
+          const mensaje = detalle
+            ? `Ya completaste una ${detalle.tipo} para ${detalle.paciente} hoy a las ${detalle.hora}. Podrás completar otra mañana.`
+            : 'Ya completaste una prestación para este paciente hoy. Solo puedes completar 1 prestación por paciente por día.';
+
+          return {
+            exito: false,
+            mensaje: mensaje,
+            distancia_metros: 0
+          };
+        }
+      }
 
       // Construir notas finales
       let notasFinales = notas || '';
@@ -1581,30 +1600,77 @@ class PrestacionService {
               distancia_metros: res.distancia_metros ?? 0,
             };
           } else if (prestacion.accion === 'cerrar_domicilio') {
-            const { data: updated, error: dbError } = await supabase
+            // Chequear estado actual antes de pisar: si el cron ya la auto-cerró,
+            // solo se permite sobreescribir con el horario real si corresponde al mismo día ARG.
+            const { data: actual, error: fetchError } = await supabase
               .from('prestaciones')
-              .update({
-                estado: 'completada',
-                completed_at: prestacion.timestamp,
-                updated_at: new Date().toISOString(),
-                ubicacion_cierre: `POINT(${prestacion.ubicacion_lng} ${prestacion.ubicacion_lat})`,
-                ...(prestacion.notas && { notas: prestacion.notas })
-              })
+              .select('estado, auto_cerrada, fecha')
               .eq('id', prestacion.prestacion_id)
-              .select('id');
+              .single();
 
-            if (dbError) throw dbError;
-            if (!updated || updated.length === 0) {
-              throw new Error('No se pudo cerrar la prestación en el servidor (sin permisos o no existe)');
+            if (fetchError) throw fetchError;
+
+            if (actual?.estado === 'completada' && actual.auto_cerrada) {
+              const fechaCierreReal = moment.tz(prestacion.timestamp, this.TIMEZONE).format('YYYY-MM-DD');
+              const fechaProgramada = moment.tz(actual.fecha, this.TIMEZONE).format('YYYY-MM-DD');
+
+              if (fechaCierreReal !== fechaProgramada) {
+                // El cierre real llegó en un día distinto: se mantiene el auto-cierre del cron
+                resultado = { exito: true, mensaje: 'Prestación ya cerrada automáticamente', distancia_metros: 0 };
+              } else {
+                const { data: updated, error: dbError } = await supabase
+                  .from('prestaciones')
+                  .update({
+                    estado: 'completada',
+                    completed_at: prestacion.timestamp,
+                    updated_at: new Date().toISOString(),
+                    ubicacion_cierre: `POINT(${prestacion.ubicacion_lng} ${prestacion.ubicacion_lat})`,
+                    auto_cerrada: false,
+                    auto_cierre_motivo: null,
+                    cierre_estado: 'manual',
+                    ...(prestacion.notas && { notas: prestacion.notas })
+                  })
+                  .eq('id', prestacion.prestacion_id)
+                  .select('id');
+
+                if (dbError) throw dbError;
+                if (!updated || updated.length === 0) {
+                  throw new Error('No se pudo cerrar la prestación en el servidor (sin permisos o no existe)');
+                }
+
+                resultado = { exito: true, mensaje: '', distancia_metros: 0 };
+              }
+            } else if (actual?.estado === 'completada') {
+              // Ya estaba completada manualmente por otro medio: no pisar
+              resultado = { exito: true, mensaje: 'Prestación ya cerrada', distancia_metros: 0 };
+            } else {
+              const { data: updated, error: dbError } = await supabase
+                .from('prestaciones')
+                .update({
+                  estado: 'completada',
+                  completed_at: prestacion.timestamp,
+                  updated_at: new Date().toISOString(),
+                  ubicacion_cierre: `POINT(${prestacion.ubicacion_lng} ${prestacion.ubicacion_lat})`,
+                  ...(prestacion.notas && { notas: prestacion.notas })
+                })
+                .eq('id', prestacion.prestacion_id)
+                .select('id');
+
+              if (dbError) throw dbError;
+              if (!updated || updated.length === 0) {
+                throw new Error('No se pudo cerrar la prestación en el servidor (sin permisos o no existe)');
+              }
+
+              resultado = { exito: true, mensaje: '', distancia_metros: 0 };
             }
-
-            resultado = { exito: true, mensaje: '', distancia_metros: 0 };
           } else {
             resultado = await this.cerrarPrestacionConValidacion(
               prestacion.prestacion_id,
               prestacion.ubicacion_lat,
               prestacion.ubicacion_lng,
-              prestacion.notas
+              prestacion.notas,
+              undefined,
+              prestacion.timestamp
             );
           }
 
