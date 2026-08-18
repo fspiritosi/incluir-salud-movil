@@ -1155,6 +1155,47 @@ class PrestacionService {
       const now = new Date().toISOString();
       const isOnline = await connectivityService.isOnline();
 
+      // VALIDACIÓN: máximo 1 prestación activa/completada por paciente por día
+      if (isOnline && prestacion?.paciente_id) {
+        const { data: { user } } = await supabase.auth.getUser();
+        const currentUserId = user?.id;
+
+        if (currentUserId) {
+          // ¿Ya hay otra prestación en_proceso para este paciente?
+          const { data: enProceso } = await supabase
+            .from('prestaciones')
+            .select('id')
+            .eq('user_id', currentUserId)
+            .eq('paciente_id', prestacion.paciente_id)
+            .eq('estado', 'en_proceso')
+            .neq('id', prestacionId)
+            .limit(1);
+
+          if (enProceso && enProceso.length > 0) {
+            return {
+              exito: false,
+              mensaje: `Ya tenés una prestación en proceso para ${prestacion.paciente_nombre}. Cerrala antes de iniciar otra.`,
+              distancia_metros: 0
+            };
+          }
+
+          // ¿Ya completó una prestación hoy para este paciente?
+          const limiteCheck = await this.verificarLimiteCompletadasHoy(currentUserId, prestacion.paciente_id);
+          if (limiteCheck.yaCompletoHoy) {
+            const detalle = limiteCheck.detallePrestacion;
+            const mensaje = detalle
+              ? `Ya completaste una ${detalle.tipo} para ${detalle.paciente} hoy a las ${detalle.hora}. Podrás completar otra mañana.`
+              : `Ya completaste una prestación para ${prestacion.paciente_nombre} hoy. Solo se permite 1 por paciente por día.`;
+
+            return {
+              exito: false,
+              mensaje,
+              distancia_metros: 0
+            };
+          }
+        }
+      }
+
       if (!isOnline) {
         // Modo offline: guardar inicio para sincronizar después
         await this.guardarPrestacionOffline({
